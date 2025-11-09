@@ -21,7 +21,7 @@ class Feature(FeatureBase):
 class PricingPlanBase(BaseModel):
     plan_name: str
     price: str
-    features: str # Could be List[str] if parsed from JSON
+    features: List[str] # Expecting a list of strings from scraper
     link: Optional[str] = None
 
 class PricingPlanCreate(PricingPlanBase):
@@ -30,6 +30,15 @@ class PricingPlanCreate(PricingPlanBase):
 class PricingPlan(PricingPlanBase):
     id: int
     saas_info_id: int
+
+    @validator('features', pre=True, always=True)
+    def parse_features(cls, v):
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except json.JSONDecodeError:
+                raise ValueError("features must be a valid JSON string or a list of strings")
+        return v
 
     class Config:
         from_attributes = True

@@ -30,7 +30,14 @@ def create_saas_info(db: Session, saas_info: schemas.SaaSInfoCreate):
         db.add(db_feature)
     
     for pricing_data in saas_info.pricing:
-        db_pricing = models.PricingPlan(**pricing_data.model_dump(), saas_info_id=db_saas_info.id)
+        pricing_features_json = json.dumps(pricing_data.features) if pricing_data.features is not None else None
+        db_pricing = models.PricingPlan(
+            plan_name=pricing_data.plan_name,
+            price=pricing_data.price,
+            features=pricing_features_json,
+            link=pricing_data.link,
+            saas_info_id=db_saas_info.id
+        )
         db.add(db_pricing)
 
     db.commit()
@@ -53,7 +60,14 @@ def update_saas_info(db: Session, saas_info_id: int, saas_info: schemas.SaaSInfo
         # Update pricing plans
         db.query(models.PricingPlan).filter(models.PricingPlan.saas_info_id == saas_info_id).delete()
         for pricing_data in saas_info.pricing:
-            db_pricing = models.PricingPlan(**pricing_data.model_dump(), saas_info_id=saas_info_id)
+            pricing_features_json = json.dumps(pricing_data.features) if pricing_data.features is not None else None
+            db_pricing = models.PricingPlan(
+                plan_name=pricing_data.plan_name,
+                price=pricing_data.price,
+                features=pricing_features_json,
+                link=pricing_data.link,
+                saas_info_id=saas_info_id
+            )
             db.add(db_pricing)
 
         db.commit()
