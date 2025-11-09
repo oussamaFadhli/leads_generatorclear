@@ -89,11 +89,13 @@ def get_leads_for_saas_info(db: Session, saas_info_id: int, skip: int = 0, limit
     return db.query(models.Lead).filter(models.Lead.saas_info_id == saas_info_id).offset(skip).limit(limit).all()
 
 def create_lead(db: Session, lead: schemas.LeadCreate, saas_info_id: int):
+    strengths_json = json.dumps(lead.strengths) if lead.strengths is not None else None
+    weaknesses_json = json.dumps(lead.weaknesses) if lead.weaknesses is not None else None
     related_subreddits_json = json.dumps(lead.related_subreddits) if lead.related_subreddits is not None else None
     db_lead = models.Lead(
         competitor_name=lead.competitor_name,
-        strength=lead.strength,
-        weakness=lead.weakness,
+        strengths=strengths_json,
+        weaknesses=weaknesses_json,
         related_subreddits=related_subreddits_json,
         saas_info_id=saas_info_id
     )

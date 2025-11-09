@@ -41,11 +41,29 @@ class Lead(Base):
     __tablename__ = "leads"
     id = Column(Integer, primary_key=True, index=True)
     competitor_name = Column(String, index=True)
-    strength = Column(Text)
-    weakness = Column(Text)
+    strengths = Column(Text) # Storing as JSON string
+    weaknesses = Column(Text) # Storing as JSON string
     related_subreddits = Column(Text) # Storing as JSON string
     saas_info_id = Column(Integer, ForeignKey("saas_info.id"))
     reddit_posts = relationship("RedditPost", backref="lead", cascade="all, delete-orphan")
+
+    @property
+    def strengths_list(self) -> Optional[List[str]]:
+        if self.strengths:
+            return json.loads(self.strengths)
+        return None
+
+    @property
+    def weaknesses_list(self) -> Optional[List[str]]:
+        if self.weaknesses:
+            return json.loads(self.weaknesses)
+        return None
+
+    @property
+    def related_subreddits_list(self) -> Optional[List[str]]:
+        if self.related_subreddits:
+            return json.loads(self.related_subreddits)
+        return None
 
 class RedditPost(Base):
     __tablename__ = "reddit_posts"

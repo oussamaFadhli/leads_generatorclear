@@ -29,8 +29,8 @@ def perform_leads_search(saas_info_id: int, db: Session):
 
     prompt_dict = f"""
     Based on the following SaaS project information, search the internet for:
-    1. A famous competitor: Identify a key competitor in the market.
-    2. Strengths and Weaknesses: For this competitor, list their main strengths and weaknesses.
+    1. Competitors: Identify a list of key competitors in the market (at least 3, up to 8).
+    2. Strengths and Weaknesses: For each competitor, list their main strengths and weaknesses as a list of strings.
     3. Related Subreddits: Find the best subreddits related to the project's interests.
 
     SaaS Project Information:
@@ -38,9 +38,18 @@ def perform_leads_search(saas_info_id: int, db: Session):
 
     IMPORTANT: Return the output as a JSON object with the following structure:
     {{
-        "competitor_name": "Name of the competitor",
-        "strength": "Main strengths of the competitor",
-        "weakness": "Main weaknesses of the competitor",
+        "competitors": [
+            {{
+                "name": "Name of the competitor",
+                "strengths": ["strength1", "strength2"],
+                "weaknesses": ["weakness1", "weakness2"]
+            }},
+            {{
+                "name": "Another competitor",
+                "strengths": ["strength1", "strength2"],
+                "weaknesses": ["weakness1", "weakness2"]
+            }}
+        ],
         "related_subreddits": ["subreddit1", "subreddit2", "subreddit3"]
     }}
 
@@ -86,84 +95,73 @@ def perform_leads_search(saas_info_id: int, db: Session):
             logging.info(f"Using raw output directly. Type: {type(processed_result)}")
 
         # Log the structure of processed_result
-        if isinstance(processed_result, list):
-            logging.info(f"Processed result is a list with {len(processed_result)} items")
-            if len(processed_result) > 0:
-                logging.info(f"First item type: {type(processed_result[0])}")
-                logging.info(f"First item: {processed_result[0]}")
-        elif isinstance(processed_result, dict):
-            logging.info(f"Processed result is a dict with keys: {processed_result.keys()}")
-        
-        # Normalize the result into a list of lead dictionaries
-        leads_to_process = []
-        
         if isinstance(processed_result, dict):
-            # Check if it's a wrapper with a 'leads' key
-            if "leads" in processed_result:
-                leads_to_process = processed_result["leads"]
-                logging.info("Found 'leads' key in dict, extracting list")
-            # Check if it's a single lead object
-            elif "competitor_name" in processed_result and "related_subreddits" in processed_result:
-                leads_to_process = [processed_result]
-                logging.info("Dict appears to be a single lead, wrapping in list")
-            else:
-                logging.error(f"Dict doesn't match expected format. Keys: {processed_result.keys()}")
-                return
-        elif isinstance(processed_result, list):
-            # Check if list items are dicts or something else
-            if len(processed_result) > 0:
-                if isinstance(processed_result[0], dict):
-                    leads_to_process = processed_result
-                    logging.info("List contains dicts, using directly")
-                else:
-                    logging.error(f"List items are not dicts. First item type: {type(processed_result[0])}")
-                    logging.error(f"First item value: {processed_result[0]}")
-                    return
-            else:
-                logging.warning("Received empty list from SearchGraph")
-                return
+            logging.info(f"Processed result is a dict with keys: {processed_result.keys()}")
         else:
-            logging.error(f"Unexpected format: {type(processed_result)}")
+            logging.error(f"Unexpected format: {type(processed_result)}. Expected a dictionary.")
             return
 
-        logging.info(f"Processing {len(leads_to_process)} leads")
+        if "competitors" not in processed_result or not isinstance(processed_result["competitors"], list):
+            logging.error("Processed result does not contain a 'competitors' list.")
+            return
 
-        # Process each lead
-        for idx, lead_item in enumerate(leads_to_process):
-            logging.info(f"Processing lead {idx + 1}/{len(leads_to_process)}")
-            logging.info(f"Lead item type: {type(lead_item)}")
-            logging.info(f"Lead item: {lead_item}")
+        if "related_subreddits" not in processed_result:
+            logging.warning("Processed result does not contain 'related_subreddits'. Using empty list.")
+            all_related_subreddits = []
+        else:
+            all_related_subreddits = processed_result["related_subreddits"]
+            if isinstance(all_related_subreddits, str):
+                try:
+                    all_related_subreddits = json.loads(all_related_subreddits)
+                except json.JSONDecodeError:
+                    logging.error(f"Could not parse top-level related_subreddits as JSON: {all_related_subreddits}")
+                    all_related_subreddits = []
+            if not isinstance(all_related_subreddits, list):
+                logging.error(f"Top-level related_subreddits is not a list: {type(all_related_subreddits)}")
+                all_related_subreddits = []
+
+        logging.info(f"Processing {len(processed_result['competitors'])} competitors")
+
+        created_leads = []
+        for idx, competitor_item in enumerate(processed_result["competitors"]):
+            logging.info(f"Processing competitor {idx + 1}/{len(processed_result['competitors'])}")
             
-            if not isinstance(lead_item, dict):
-                logging.error(f"Lead item is not a dict: {type(lead_item)} - {lead_item}")
+            if not isinstance(competitor_item, dict):
+                logging.error(f"Competitor item is not a dict: {type(competitor_item)} - {competitor_item}")
                 continue
                 
-            # Validate required fields
-            required_fields = ["competitor_name", "related_subreddits"]
-            missing_fields = [f for f in required_fields if f not in lead_item]
+            required_fields = ["name", "strengths", "weaknesses"]
+            missing_fields = [f for f in required_fields if f not in competitor_item]
             
             if missing_fields:
-                logging.error(f"Lead item missing required fields: {missing_fields}")
-                logging.error(f"Available keys: {lead_item.keys()}")
+                logging.error(f"Competitor item missing required fields: {missing_fields}")
+                logging.error(f"Available keys: {competitor_item.keys()}")
                 continue
             
             try:
-                lead_data = lead_item.copy()
-                
-                # Remove 'sources' as it's not part of the LeadCreate schema
-                lead_data.pop("sources", None)
-                
-                # Ensure related_subreddits is a list
-                if isinstance(lead_data.get("related_subreddits"), str):
-                    try:
-                        lead_data["related_subreddits"] = json.loads(lead_data["related_subreddits"])
-                    except json.JSONDecodeError:
-                        logging.error(f"Could not parse related_subreddits as JSON: {lead_data['related_subreddits']}")
-                        continue
+                lead_data = {
+                    "competitor_name": competitor_item["name"],
+                    "strengths": competitor_item.get("strengths", []),
+                    "weaknesses": competitor_item.get("weaknesses", []),
+                    "related_subreddits": all_related_subreddits # Associate top-level subreddits with each lead
+                }
+
+                # Ensure strengths and weaknesses are lists of strings
+                for key in ["strengths", "weaknesses"]:
+                    if isinstance(lead_data[key], str):
+                        try:
+                            lead_data[key] = json.loads(lead_data[key])
+                        except json.JSONDecodeError:
+                            logging.error(f"Could not parse {key} as JSON for {lead_data['competitor_name']}: {lead_data[key]}")
+                            lead_data[key] = []
+                    if not isinstance(lead_data[key], list):
+                        logging.error(f"{key} is not a list for {lead_data['competitor_name']}: {type(lead_data[key])}")
+                        lead_data[key] = []
 
                 logging.info(f"Creating lead with data: {lead_data}")
                 lead_schema = schemas.LeadCreate(**lead_data)
                 created_lead = crud.create_lead(db, lead_schema, saas_info_id)
+                created_leads.append(created_lead)
                 logging.info(f"Successfully created lead with ID: {created_lead.id if hasattr(created_lead, 'id') else 'unknown'}")
                 
             except Exception as e:
@@ -171,6 +169,9 @@ def perform_leads_search(saas_info_id: int, db: Session):
                 logging.error(f"Lead data was: {lead_data}")
                 import traceback
                 logging.error(f"Traceback: {traceback.format_exc()}")
+        
+        # Return the list of created leads (or a simplified representation)
+        return {"competitors": [schemas.Lead.from_orm(lead).dict() for lead in created_leads], "related_subreddits": all_related_subreddits}
 
     except Exception as e:
         logging.error(f"Error during lead search for SaaS Info ID {saas_info_id}: {e}")

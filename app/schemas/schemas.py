@@ -115,17 +115,17 @@ class GeneratedPostContent(BaseModel):
 # Lead Schemas
 class LeadBase(BaseModel):
     competitor_name: str
-    strength: str
-    weakness: str
-    related_subreddits: List[str]
+    strengths: List[str] = Field(default_factory=list)
+    weaknesses: List[str] = Field(default_factory=list)
+    related_subreddits: List[str] = Field(default_factory=list)
 
-    @validator('related_subreddits', pre=True, always=True)
-    def parse_related_subreddits(cls, v):
+    @validator('strengths', 'weaknesses', 'related_subreddits', pre=True, always=True)
+    def parse_json_list(cls, v):
         if isinstance(v, str):
             try:
                 return json.loads(v)
             except json.JSONDecodeError:
-                raise ValueError("related_subreddits must be a valid JSON string or a list of strings")
+                raise ValueError("Field must be a valid JSON string or a list of strings")
         return v
 
 class LeadCreate(LeadBase):
