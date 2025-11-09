@@ -18,10 +18,12 @@ graph_config = {
         "api_key": nvidia_key,
         "model": "nvidia/mistralai/mistral-nemotron",
         "temperature": 0,
+        "backend": "undetected_chromedriver",
         "format": "json", 
     },
     "verbose": True,
     "headless": True,
+    "loader_kwargs": {"slow_mo": 40000},
     "depth": 1,
     "only_inside_links": False,
 }

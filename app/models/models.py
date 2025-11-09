@@ -43,7 +43,7 @@ class Lead(Base):
     competitor_name = Column(String, index=True)
     strength = Column(Text)
     weakness = Column(Text)
-    related_subreddit = Column(String, index=True)
+    related_subreddits = Column(Text) # Storing as JSON string
     saas_info_id = Column(Integer, ForeignKey("saas_info.id"))
     reddit_posts = relationship("RedditPost", backref="lead", cascade="all, delete-orphan")
 

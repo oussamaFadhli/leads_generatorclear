@@ -108,7 +108,7 @@ class LeadBase(BaseModel):
     competitor_name: str
     strength: str
     weakness: str
-    related_subreddit: str
+    related_subreddits: List[str]
 
 class LeadCreate(LeadBase):
     pass
@@ -117,6 +117,15 @@ class Lead(LeadBase):
     id: int
     saas_info_id: int
     reddit_posts: List[RedditPost] = []
+
+    @validator('related_subreddits', pre=True, always=True)
+    def parse_related_subreddits(cls, v):
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except json.JSONDecodeError:
+                raise ValueError("related_subreddits must be a valid JSON string or a list of strings")
+        return v
 
     class Config:
         from_attributes = True
