@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from app.crud import crud
 from app.models import models
 from app.schemas import schemas
+from app.schemas.schemas import LeadCreate # Import LeadCreate schema
 from app.services.reddit import auth_service, account_service, db_operations_service, scraping_service, generation_service, posting_service, preview_service
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -90,8 +91,17 @@ async def reply_to_reddit_post_comments(saas_info_id: int, reddit_post_url: str,
         # For now, let's fetch the first lead associated with the saas_info_id.
         db_lead = db.query(models.Lead).filter(models.Lead.saas_info_id == saas_info_id).first()
         if not db_lead:
-            logging.error(f"No lead found for SaaS Info ID {saas_info_id}. Cannot create RedditPost placeholder.")
-            return
+            logging.warning(f"No lead found for SaaS Info ID {saas_info_id}. Creating a default lead.")
+            # Create a default lead if none exists for the saas_info_id
+            default_lead_create = schemas.LeadCreate(
+                competitor_name=f"Default Lead for SaaS {saas_info_id}",
+                strengths=["general problem solving"],
+                weaknesses=["lack of specific focus"],
+                related_subreddits=["general_discussion"]
+            )
+            db_lead = crud.create_lead(db, default_lead_create, saas_info_id)
+            db.refresh(db_lead)
+            logging.info(f"Created default Lead with ID: {db_lead.id} for SaaS Info ID: {saas_info_id}")
 
         reddit_post_create = schemas.RedditPostCreate(
             title=post_title,
