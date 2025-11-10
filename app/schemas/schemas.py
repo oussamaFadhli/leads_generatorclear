@@ -79,12 +79,24 @@ class RedditPostBase(BaseModel):
     num_comments: int
     author: str
     url: str
-    subreddit: str
+    subreddits: Optional[List[str]] = None # Made optional
+
+    @validator('subreddits', pre=True, always=True)
+    def parse_subreddits(cls, v):
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except json.JSONDecodeError:
+                raise ValueError("subreddits must be a valid JSON string or a list of strings")
+        return v
 
 class RedditPostCreate(RedditPostBase):
     pass
 
 class RedditPostUpdate(RedditPostBase):
+    # Re-defining subreddits here to ensure optionality is respected,
+    # and providing a default factory to ensure it's always a list if not provided.
+    subreddits: Optional[List[str]] = Field(default_factory=list)
     lead_score: Optional[float] = None
     score_justification: Optional[str] = None
     generated_title: Optional[str] = None
@@ -92,6 +104,8 @@ class RedditPostUpdate(RedditPostBase):
     is_posted: Optional[bool] = False
     ai_generated: Optional[bool] = False
     posted_url: Optional[str] = None
+    # Removed 'subreddit' field as it no longer exists in the model.
+    # The 'subreddits' field (plural) is now used.
 
 class RedditPost(RedditPostBase):
     id: int
@@ -103,6 +117,8 @@ class RedditPost(RedditPostBase):
     posted_url: Optional[str] = None
     is_posted: bool = False
     ai_generated: bool = False
+    # Removed 'subreddit' field as it no longer exists in the model.
+    # The 'subreddits' field (plural) is now used.
 
     class Config:
         from_attributes = True

@@ -74,7 +74,7 @@ class RedditPost(Base):
     num_comments = Column(Integer)
     author = Column(String)
     url = Column(String)
-    subreddit = Column(String, index=True)
+    subreddits = Column(Text) # Storing as JSON string
     lead_score = Column(Float, nullable=True)
     score_justification = Column(Text, nullable=True)
     generated_title = Column(String, nullable=True)
@@ -83,3 +83,12 @@ class RedditPost(Base):
     ai_generated = Column(Boolean, default=False)
     posted_url = Column(String, nullable=True)
     lead_id = Column(Integer, ForeignKey("leads.id"))
+
+    @property
+    def subreddits_list(self) -> List[str]:
+        if self.subreddits:
+            try:
+                return json.loads(self.subreddits)
+            except json.JSONDecodeError:
+                return [] # Return empty list on decode error
+        return [] # Return empty list if subreddits is None or empty

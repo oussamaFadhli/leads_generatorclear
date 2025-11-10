@@ -7,16 +7,21 @@ from app.schemas import schemas
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-def check_if_already_posted(db: Session, lead_id: int, subreddit_name: str) -> bool:
-    """Check if we've already posted to this subreddit for this lead."""
+import json
+
+def check_if_already_posted_to_subreddit(db: Session, lead_id: int, generated_title: str, target_subreddit: str) -> bool:
+    """
+    Check if a specific generated post (by lead_id and generated_title) has already been posted
+    to the given target_subreddit.
+    """
     existing_post = db.query(models.RedditPost).filter(
         models.RedditPost.lead_id == lead_id,
-        models.RedditPost.subreddit == subreddit_name,
+        models.RedditPost.generated_title == generated_title,
         models.RedditPost.is_posted == True
     ).first()
-    
-    if existing_post:
-        logging.warning(f"Already posted to r/{subreddit_name} for Lead ID {lead_id}. Skipping duplicate.")
+
+    if existing_post and existing_post.subreddits_list and target_subreddit in existing_post.subreddits_list:
+        logging.warning(f"Post (Lead ID: {lead_id}, Title: '{generated_title}') already posted to r/{target_subreddit}. Skipping duplicate.")
         return True
     return False
 
@@ -48,6 +53,43 @@ def update_reddit_post_in_db(db: Session, post_id: int, post_update_schema: sche
     """Updates a Reddit post in the database."""
     crud.update_reddit_post(db, post_id, post_update_schema)
     db.commit()
+
+def mark_subreddit_as_posted(db: Session, post_id: int, target_subreddit: str, post_update_schema: schemas.RedditPostUpdate):
+    """
+    Marks a specific subreddit as posted for a given RedditPost and updates other relevant fields.
+    """
+    db_post = crud.get_reddit_post(db, post_id)
+    if not db_post:
+        logging.error(f"Reddit Post with ID {post_id} not found for marking subreddit as posted.")
+        return
+
+    # Update the subreddits list
+    current_subreddits = db_post.subreddits_list if db_post.subreddits_list else []
+    if target_subreddit not in current_subreddits:
+        current_subreddits.append(target_subreddit)
+        db_post.subreddits = json.dumps(current_subreddits)
+    
+    # Update other fields from the schema
+    db_post.title = post_update_schema.title
+    db_post.content = post_update_schema.content
+    db_post.score = post_update_schema.score
+    db_post.num_comments = post_update_schema.num_comments
+    db_post.author = post_update_schema.author
+    db_post.url = post_update_schema.url
+    # The 'subreddit' field in the schema was intended to represent the *last* subreddit posted to,
+    # but the model no longer has a singular 'subreddit' column. The 'subreddits' column (plural)
+    # now stores the list of all subreddits this post has been made to.
+    # We will not assign post_update_schema.subreddit to db_post.subreddit as it no longer exists.
+    db_post.generated_title = post_update_schema.generated_title
+    db_post.generated_content = post_update_schema.generated_content
+    db_post.is_posted = post_update_schema.is_posted
+    db_post.ai_generated = post_update_schema.ai_generated
+    db_post.posted_url = post_update_schema.posted_url
+
+    db.add(db_post)
+    db.commit()
+    db.refresh(db_post)
+    logging.info(f"Reddit Post ID {post_id} marked as posted to r/{target_subreddit}.")
 
 def get_most_recent_posted_post(db: Session):
     """Get the most recent posted post."""

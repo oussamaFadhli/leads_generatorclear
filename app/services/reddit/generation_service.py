@@ -97,7 +97,7 @@ async def generate_reddit_posts(saas_info_id: int, post_id: int, db: Session):
                     num_comments=db_post.num_comments,
                     author=db_post.author,
                     url=db_post.url,
-                    subreddit=db_post.subreddit,
+                    subreddits=db_post.subreddits_list if db_post.subreddits_list is not None else [], # Ensure subreddits is always a list
                     generated_title=generated_post_content_obj.title,
                     generated_content=generated_post_content_obj.content,
                     ai_generated=True

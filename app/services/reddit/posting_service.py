@@ -39,59 +39,83 @@ async def post_generated_reddit_post(post_id: int, db: Session):
         logging.warning(f"Post ID {post_id} is already marked as posted. Skipping duplicate post.")
         return
     
-    if db_operations_service.check_if_already_posted(db, db_post.lead_id, db_post.subreddit):
+    target_subreddits = db_post.subreddits_list if db_post.subreddits_list else []
+    if not target_subreddits:
+        logging.warning(f"Post ID {post_id} has no target subreddits defined. Skipping posting.")
         return
 
-    target_subreddit = "testingground4bots" #db_post.subreddit
-    
-    delay = 1 #random.uniform(30, 90)
-    logging.info(f"Waiting {delay:.1f} seconds before posting (anti-spam delay)...")
-    time.sleep(delay)
+    posted_successfully = False
 
-    try:
-        subreddit = reddit.subreddit(target_subreddit)
-        
-        if db_post.url and 'comments' in db_post.url:
-            try:
-                submission_id = db_post.url.split('/comments/')[1].split('/')[0]
-                submission = reddit.submission(id=submission_id)
-                
-                time.sleep(random.uniform(5, 15))
-                
-                comment = submission.reply(db_post.generated_content)
-                logging.info(f"Successfully posted comment to r/{target_subreddit} on post: {db_post.title}")
-                logging.info(f"Comment ID: {comment.id}")
-                
-            except Exception as e:
-                logging.error(f"Failed to post as comment, trying as new post: {e}")
-                raise e
-        else:
-            submission = subreddit.submit(
-                db_post.generated_title, 
-                selftext=db_post.generated_content
+    for target_subreddit in target_subreddits:
+        # Check if this specific post (lead_id and generated_title) has already been posted to this target_subreddit
+        if db_operations_service.check_if_already_posted_to_subreddit(db, db_post.lead_id, db_post.generated_title, target_subreddit):
+            logging.info(f"Post ID {post_id} (title: '{db_post.generated_title}') already posted to r/{target_subreddit}. Skipping.")
+            continue
+
+        delay = 60 # 1 minute delay
+        logging.info(f"Waiting {delay:.1f} seconds before posting to r/{target_subreddit} (anti-spam delay)...")
+        time.sleep(delay)
+
+        try:
+            subreddit = reddit.subreddit(target_subreddit)
+            
+            submission = None
+            comment = None
+
+            if db_post.url and 'comments' in db_post.url:
+                try:
+                    submission_id = db_post.url.split('/comments/')[1].split('/')[0]
+                    submission_to_comment = reddit.submission(id=submission_id)
+                    
+                    time.sleep(random.uniform(5, 15))
+                    
+                    comment = submission_to_comment.reply(db_post.generated_content)
+                    logging.info(f"Successfully posted comment to r/{target_subreddit} on post: {db_post.title}")
+                    logging.info(f"Comment ID: {comment.id}")
+                    
+                except Exception as e:
+                    logging.error(f"Failed to post as comment to r/{target_subreddit}, trying as new post: {e}")
+                    # If commenting fails, try posting as a new submission
+                    submission = subreddit.submit(
+                        db_post.generated_title, 
+                        selftext=db_post.generated_content
+                    )
+                    logging.info(f"Successfully posted to r/{target_subreddit}: '{db_post.generated_title}'")
+                    logging.info(f"Submission ID: {submission.id}")
+            else:
+                submission = subreddit.submit(
+                    db_post.generated_title, 
+                    selftext=db_post.generated_content
+                )
+                logging.info(f"Successfully posted to r/{target_subreddit}: '{db_post.generated_title}'")
+                logging.info(f"Submission ID: {submission.id}")
+            
+            time.sleep(random.uniform(10, 20))
+
+            # Update the database for the specific subreddit it was posted to
+            post_update_schema = schemas.RedditPostUpdate(
+                title=db_post.title,
+                content=db_post.content,
+                score=db_post.score,
+                num_comments=db_post.num_comments,
+                author=db_post.author,
+                url=db_post.url,
+                # The 'subreddit' field in the schema was removed as the model no longer has a singular 'subreddit' column.
+                # The 'subreddits' field (plural) is handled directly by db_operations_service.mark_subreddit_as_posted.
+                generated_title=db_post.generated_title,
+                generated_content=db_post.generated_content,
+                is_posted=True,
+                ai_generated=db_post.ai_generated,
+                posted_url=f"https://www.reddit.com{comment.permalink}" if comment else f"https://www.reddit.com{submission.permalink}"
             )
-            logging.info(f"Successfully posted to r/{target_subreddit}: '{db_post.generated_title}'")
-            logging.info(f"Submission ID: {submission.id}")
-        
-        time.sleep(random.uniform(10, 20))
-
-        post_update_schema = schemas.RedditPostUpdate(
-            title=db_post.title,
-            content=db_post.content,
-            score=db_post.score,
-            num_comments=db_post.num_comments,
-            author=db_post.author,
-            url=db_post.url,
-            subreddit=db_post.subreddit,
-            generated_title=db_post.generated_title,
-            generated_content=db_post.generated_content,
-            is_posted=True,
-            ai_generated=db_post.ai_generated,
-            posted_url=f"https://www.reddit.com{comment.permalink}" if 'comment' in locals() else f"https://www.reddit.com{submission.permalink}"
-        )
-        db_operations_service.update_reddit_post_in_db(db, post_id, post_update_schema)
-        
-    except Exception as e:
-        logging.error(f"Failed to post to r/{target_subreddit} for Post ID {post_id}: {e}")
-    finally:
-        db.close()
+            # We need a new function to update the specific subreddit in the list of subreddits for the post
+            db_operations_service.mark_subreddit_as_posted(db, post_id, target_subreddit, post_update_schema)
+            posted_successfully = True
+            
+        except Exception as e:
+            logging.error(f"Failed to post to r/{target_subreddit} for Post ID {post_id}: {e}")
+    
+    if not posted_successfully:
+        logging.warning(f"Post ID {post_id} was not successfully posted to any target subreddit.")
+    
+    db.close()

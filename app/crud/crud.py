@@ -119,7 +119,19 @@ def get_reddit_posts_for_lead(db: Session, lead_id: int, skip: int = 0, limit: i
     return db.query(models.RedditPost).filter(models.RedditPost.lead_id == lead_id).offset(skip).limit(limit).all()
 
 def create_reddit_post(db: Session, post: schemas.RedditPostCreate, lead_id: int):
-    db_post = models.RedditPost(**post.model_dump(), lead_id=lead_id)
+    # Convert subreddits list to JSON string for storage
+    subreddits_json = json.dumps(post.subreddits) if post.subreddits is not None else None
+    
+    db_post = models.RedditPost(
+        title=post.title,
+        content=post.content,
+        score=post.score,
+        num_comments=post.num_comments,
+        author=post.author,
+        url=post.url,
+        subreddits=subreddits_json, # Save as JSON string
+        lead_id=lead_id
+    )
     db.add(db_post)
     db.commit()
     db.refresh(db_post)
@@ -128,9 +140,20 @@ def create_reddit_post(db: Session, post: schemas.RedditPostCreate, lead_id: int
 def update_reddit_post(db: Session, post_id: int, post_update: schemas.RedditPostUpdate):
     db_post = db.query(models.RedditPost).filter(models.RedditPost.id == post_id).first()
     if db_post:
+        # Use model_dump without exclude_unset for subreddits to ensure it's always present
+        # and handle other fields with exclude_unset=True
         update_data = post_update.model_dump(exclude_unset=True)
+        
+        # Explicitly handle subreddits to ensure it's converted to JSON string
+        # and is not excluded if it's an empty list.
+        if 'subreddits' in post_update.model_fields_set: # Check if subreddits was explicitly provided
+            db_post.subreddits = json.dumps(post_update.subreddits) if post_update.subreddits is not None else json.dumps([])
+            if 'subreddits' in update_data: # Remove from update_data if it was included by model_dump
+                del update_data['subreddits']
+        
         for key, value in update_data.items():
             setattr(db_post, key, value)
+        
         db.add(db_post)
         db.commit()
         db.refresh(db_post)

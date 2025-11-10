@@ -31,7 +31,7 @@ async def fetch_reddit_posts(reddit: praw.Reddit, subreddit_name: str, limit: in
                     num_comments=post.num_comments,
                     author=str(post.author),
                     url=post.url,
-                    subreddit=subreddit_name
+                    subreddits=[subreddit_name] # Changed to subreddits (list)
                 )
             )
         logging.info(f"Successfully fetched {len(posts_data)} posts from r/{subreddit_name}")
