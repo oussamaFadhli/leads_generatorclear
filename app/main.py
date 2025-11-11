@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import HTTPException
-from app.api.routers import saas_info, leads, reddit_posts
+from app.api.routers import saas_info, leads, reddit_posts, tasks
 from app.core.database import engine
 from app.core.dependencies import get_command_bus, get_query_bus
 from app.models import models # Keep for target_metadata in Alembic env.py, but not for create_all
@@ -35,6 +35,7 @@ app.include_router(saas_info.router)
 app.include_router(leads.router)
 app.include_router(reddit_posts.router)
 app.include_router(reddit_posts.comments_router) # Include the new comments router
+app.include_router(tasks.router) # Include the new tasks router
 
 @app.get("/")
 async def root():

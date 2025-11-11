@@ -4,3 +4,4 @@ from .reddit_post_commands import CreateRedditPostCommand, UpdateRedditPostComma
 from .reddit_comment_commands import CreateRedditCommentCommand, UpdateRedditCommentCommand, DeleteRedditCommentCommand
 from .feature_commands import CreateFeatureCommand, UpdateFeatureCommand, DeleteFeatureCommand
 from .pricing_plan_commands import CreatePricingPlanCommand, UpdatePricingPlanCommand, DeletePricingPlanCommand
+from .task_commands import CreateTaskCommand, UpdateTaskStatusCommand

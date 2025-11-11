@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status
 from typing import List, Tuple
+import praw # Import praw for Reddit instance
 
 from app.schemas import schemas
-from app.core.dependencies import get_command_bus, get_query_bus
+from app.core.dependencies import get_command_bus, get_query_bus, get_reddit_instance # Assuming get_reddit_instance exists or will be created
 from app.core.cqrs import CommandBus, QueryBus
 from app.commands.reddit_post_commands import CreateRedditPostCommand, UpdateRedditPostCommand, DeleteRedditPostCommand
 from app.commands.reddit_comment_commands import CreateRedditCommentCommand, UpdateRedditCommentCommand, DeleteRedditCommentCommand
@@ -16,6 +17,7 @@ from app.services.reddit_service import (
     post_generated_reddit_post,
     reply_to_reddit_post_comments # Import the new service function
 )
+from app.services.scraping_orchestrator_service import ScrapingOrchestratorService # Import the new service
 
 router = APIRouter(
     prefix="/saas-info/{saas_info_id}/leads/{lead_id}/reddit-posts",
@@ -202,3 +204,28 @@ async def trigger_reddit_post_endpoint(
     
     background_tasks.add_task(post_generated_reddit_post, post_id)
     return {"message": f"Reddit post ID {post_id} scheduled for posting."}
+
+@router.post("/scrape/{subreddit_name}", status_code=status.HTTP_202_ACCEPTED)
+async def trigger_reddit_scraping_endpoint(
+    saas_info_id: int,
+    lead_id: int,
+    subreddit_name: str,
+    client_id: str, # Client ID for WebSocket tracking
+    background_tasks: BackgroundTasks,
+    reddit_instance: praw.Reddit = Depends(get_reddit_instance), # Inject Reddit instance
+    command_bus: CommandBus = Depends(get_command_bus),
+    query_bus: QueryBus = Depends(get_query_bus)
+):
+    await verify_lead_and_saas_info(saas_info_id, lead_id, query_bus)
+    
+    orchestrator_service = ScrapingOrchestratorService(command_bus)
+    
+    background_tasks.add_task(
+        orchestrator_service.orchestrate_reddit_scraping,
+        reddit_instance,
+        subreddit_name,
+        10, # Default limit for now, can be made configurable
+        client_id,
+        f"lead_{lead_id}_saas_{saas_info_id}" # Agent ID for the task
+    )
+    return {"message": f"Reddit scraping for subreddit '{subreddit_name}' initiated in the background. Task updates will be sent to client '{client_id}'."}

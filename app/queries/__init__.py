@@ -4,3 +4,4 @@ from .reddit_post_queries import GetRedditPostByIdQuery, GetRedditPostByTitleQue
 from .reddit_comment_queries import GetRedditCommentByIdQuery, GetRedditCommentByCommentIdQuery, ListRedditCommentsQuery
 from .feature_queries import GetFeatureByIdQuery, GetFeatureByNameQuery, ListFeaturesQuery
 from .pricing_plan_queries import GetPricingPlanByIdQuery, GetPricingPlanByPlanNameQuery, ListPricingPlansQuery
+from .task_queries import GetTaskQuery, GetAllTasksQuery, GetTasksByAgentIdQuery

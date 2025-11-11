@@ -8,11 +8,14 @@ from app.core.dependencies import AsyncSessionLocal, create_command_bus, create_
 from app.commands.lead_commands import CreateLeadCommand
 from app.commands.reddit_post_commands import CreateRedditPostCommand
 from app.commands.reddit_comment_commands import CreateRedditCommentCommand, UpdateRedditCommentCommand
+from app.commands.task_commands import CreateTaskCommand, UpdateTaskStatusCommand # Import Task Commands
 from app.queries.saas_info_queries import GetSaaSInfoByIdQuery
 from app.queries.lead_queries import GetLeadByIdQuery, ListLeadsQuery
 from app.queries.reddit_post_queries import GetRedditPostByIdQuery, GetRedditPostByTitleQuery, ListRedditPostsQuery
 from app.queries.reddit_comment_queries import GetRedditCommentByCommentIdQuery, GetRedditCommentByIdQuery, ListRedditCommentsQuery
 from app.services.reddit import auth_service, account_service, scraping_service, generation_service, posting_service, preview_service
+from app.core.websocket_manager import websocket_manager # Import WebSocket Manager
+import json # Import json for WebSocket messages
 
 if TYPE_CHECKING:
     from app.services.reddit import generation_service as GenerationServiceModule
@@ -40,7 +43,20 @@ async def perform_reddit_analysis(
     query_bus: QueryBus | None = None,
 ):
     async with _bus_context(command_bus, query_bus) as (cmd_bus, qry_bus):
-        await _perform_reddit_analysis(saas_info_id, lead_id, subreddit_name, cmd_bus, qry_bus)
+        # Create a task entry
+        create_task_command = CreateTaskCommand(
+            agent_id=f"reddit_analysis_lead_{lead_id}",
+            task_name=f"Reddit Analysis for r/{subreddit_name} (Lead {lead_id})",
+            status="pending"
+        )
+        task_db = await cmd_bus.dispatch(create_task_command)
+        task_id = task_db.id if task_db else None # Assuming dispatch returns the created task object
+
+        if task_id:
+            await websocket_manager.broadcast(json.dumps({"task_id": task_id, "status": "pending", "task_name": create_task_command.task_name}))
+            await _perform_reddit_analysis(saas_info_id, lead_id, subreddit_name, cmd_bus, qry_bus, task_id)
+        else:
+            logging.error("Failed to create task for Reddit analysis.")
 
 async def _perform_reddit_analysis(
     saas_info_id: int,
@@ -48,24 +64,41 @@ async def _perform_reddit_analysis(
     subreddit_name: str,
     command_bus: CommandBus,
     query_bus: QueryBus,
+    task_id: Optional[int] = None
 ):
     logging.info(f"Starting Reddit analysis for subreddit: {subreddit_name}, Lead ID: {lead_id}")
+    if task_id:
+        await command_bus.dispatch(UpdateTaskStatusCommand(task_id=task_id, status="running"))
+        await websocket_manager.broadcast(json.dumps({"task_id": task_id, "status": "running"}))
+
     reddit = auth_service.get_reddit_instance()
     if not reddit:
+        if task_id:
+            await command_bus.dispatch(UpdateTaskStatusCommand(task_id=task_id, status="failed", result_data={"error": "Reddit instance not available."}))
+            await websocket_manager.broadcast(json.dumps({"task_id": task_id, "status": "failed", "error": "Reddit instance not available."}))
         return
     
     if not account_service.check_account_health(reddit):
         logging.error("Account health check failed. Aborting.")
+        if task_id:
+            await command_bus.dispatch(UpdateTaskStatusCommand(task_id=task_id, status="failed", result_data={"error": "Account health check failed."}))
+            await websocket_manager.broadcast(json.dumps({"task_id": task_id, "status": "failed", "error": "Account health check failed."}))
         return
 
     saas_info_db = await query_bus.dispatch(GetSaaSInfoByIdQuery(saas_info_id=saas_info_id))
     if not saas_info_db:
         logging.error(f"SaaS Info with ID {saas_info_id} not found.")
+        if task_id:
+            await command_bus.dispatch(UpdateTaskStatusCommand(task_id=task_id, status="failed", result_data={"error": f"SaaS Info with ID {saas_info_id} not found."}))
+            await websocket_manager.broadcast(json.dumps({"task_id": task_id, "status": "failed", "error": f"SaaS Info with ID {saas_info_id} not found."}))
         return
 
     fetched_posts = await scraping_service.fetch_reddit_posts(reddit, subreddit_name)
     if not fetched_posts:
         logging.warning(f"No posts fetched from r/{subreddit_name}. Aborting.")
+        if task_id:
+            await command_bus.dispatch(UpdateTaskStatusCommand(task_id=task_id, status="completed", result_data={"message": f"No posts fetched from r/{subreddit_name}."}))
+            await websocket_manager.broadcast(json.dumps({"task_id": task_id, "status": "completed", "message": f"No posts fetched from r/{subreddit_name}."}))
         return
 
     for post_data in fetched_posts:
@@ -86,6 +119,10 @@ async def _perform_reddit_analysis(
             logging.info(f"Saved new Reddit post: {post_data.title}")
         else:
             logging.info(f"Reddit post '{post_data.title}' already exists. Skipping.")
+    
+    if task_id:
+        await command_bus.dispatch(UpdateTaskStatusCommand(task_id=task_id, status="completed", result_data={"message": f"Reddit analysis for r/{subreddit_name} completed."}))
+        await websocket_manager.broadcast(json.dumps({"task_id": task_id, "status": "completed", "message": f"Reddit analysis for r/{subreddit_name} completed."}))
 
 async def generate_reddit_posts(
     saas_info_id: int,
@@ -94,7 +131,29 @@ async def generate_reddit_posts(
     query_bus: QueryBus | None = None,
 ) -> None:
     async with _bus_context(command_bus, query_bus) as (cmd_bus, qry_bus):
-        await generation_service.generate_reddit_posts(saas_info_id, post_id, cmd_bus, qry_bus)
+        # Create a task entry
+        create_task_command = CreateTaskCommand(
+            agent_id=f"generate_reddit_posts_post_{post_id}",
+            task_name=f"Generate Reddit Posts for Post {post_id}",
+            status="pending"
+        )
+        task_db = await cmd_bus.dispatch(create_task_command)
+        task_id = task_db.id if task_db else None
+
+        if task_id:
+            await websocket_manager.broadcast(json.dumps({"task_id": task_id, "status": "pending", "task_name": create_task_command.task_name}))
+            try:
+                await cmd_bus.dispatch(UpdateTaskStatusCommand(task_id=task_id, status="running"))
+                await websocket_manager.broadcast(json.dumps({"task_id": task_id, "status": "running"}))
+                await generation_service.generate_reddit_posts(saas_info_id, post_id, cmd_bus, qry_bus)
+                await cmd_bus.dispatch(UpdateTaskStatusCommand(task_id=task_id, status="completed", result_data={"message": f"Generated Reddit posts for post {post_id}."}))
+                await websocket_manager.broadcast(json.dumps({"task_id": task_id, "status": "completed", "message": f"Generated Reddit posts for post {post_id}."}))
+            except Exception as e:
+                logging.error(f"Error generating Reddit posts for post {post_id}: {e}", exc_info=True)
+                await cmd_bus.dispatch(UpdateTaskStatusCommand(task_id=task_id, status="failed", result_data={"error": str(e)}))
+                await websocket_manager.broadcast(json.dumps({"task_id": task_id, "status": "failed", "error": str(e)}))
+        else:
+            logging.error("Failed to create task for generating Reddit posts.")
 
 async def post_generated_reddit_post(
     post_id: int,
@@ -102,7 +161,29 @@ async def post_generated_reddit_post(
     query_bus: QueryBus | None = None,
 ) -> None:
     async with _bus_context(command_bus, query_bus) as (cmd_bus, qry_bus):
-        await posting_service.post_generated_reddit_post(post_id, cmd_bus, qry_bus)
+        # Create a task entry
+        create_task_command = CreateTaskCommand(
+            agent_id=f"post_generated_reddit_post_{post_id}",
+            task_name=f"Post Generated Reddit Post {post_id}",
+            status="pending"
+        )
+        task_db = await cmd_bus.dispatch(create_task_command)
+        task_id = task_db.id if task_db else None
+
+        if task_id:
+            await websocket_manager.broadcast(json.dumps({"task_id": task_id, "status": "pending", "task_name": create_task_command.task_name}))
+            try:
+                await cmd_bus.dispatch(UpdateTaskStatusCommand(task_id=task_id, status="running"))
+                await websocket_manager.broadcast(json.dumps({"task_id": task_id, "status": "running"}))
+                await posting_service.post_generated_reddit_post(post_id, cmd_bus, qry_bus)
+                await cmd_bus.dispatch(UpdateTaskStatusCommand(task_id=task_id, status="completed", result_data={"message": f"Posted generated Reddit post {post_id}."}))
+                await websocket_manager.broadcast(json.dumps({"task_id": task_id, "status": "completed", "message": f"Posted generated Reddit post {post_id}."}))
+            except Exception as e:
+                logging.error(f"Error posting generated Reddit post {post_id}: {e}", exc_info=True)
+                await cmd_bus.dispatch(UpdateTaskStatusCommand(task_id=task_id, status="failed", result_data={"error": str(e)}))
+                await websocket_manager.broadcast(json.dumps({"task_id": task_id, "status": "failed", "error": str(e)}))
+        else:
+            logging.error("Failed to create task for posting generated Reddit post.")
 
 async def preview_generated_post(post_id: int, query_bus: QueryBus) -> Optional[dict]:
     return await preview_service.preview_generated_post(post_id, query_bus)
@@ -114,27 +195,54 @@ async def reply_to_reddit_post_comments(
     query_bus: QueryBus | None = None,
 ):
     async with _bus_context(command_bus, query_bus) as (cmd_bus, qry_bus):
-        await _reply_to_reddit_post_comments(saas_info_id, reddit_post_url, cmd_bus, qry_bus)
+        # Create a task entry
+        create_task_command = CreateTaskCommand(
+            agent_id=f"reply_to_comments_post_url_{reddit_post_url}",
+            task_name=f"Reply to Comments for Reddit Post URL: {reddit_post_url}",
+            status="pending"
+        )
+        task_db = await cmd_bus.dispatch(create_task_command)
+        task_id = task_db.id if task_db else None
+
+        if task_id:
+            await websocket_manager.broadcast(json.dumps({"task_id": task_id, "status": "pending", "task_name": create_task_command.task_name}))
+            await _reply_to_reddit_post_comments(saas_info_id, reddit_post_url, cmd_bus, qry_bus, task_id)
+        else:
+            logging.error("Failed to create task for replying to Reddit post comments.")
 
 async def _reply_to_reddit_post_comments(
     saas_info_id: int,
     reddit_post_url: str,
     command_bus: CommandBus,
     query_bus: QueryBus,
+    task_id: Optional[int] = None,
     generation_service: "GenerationServiceModule" = generation_service, # Explicitly pass and type the module
 ):
     logging.info(f"Starting process to reply to comments for Reddit post URL: {reddit_post_url}")
+    if task_id:
+        await command_bus.dispatch(UpdateTaskStatusCommand(task_id=task_id, status="running"))
+        await websocket_manager.broadcast(json.dumps({"task_id": task_id, "status": "running"}))
+
     reddit = auth_service.get_reddit_instance()
     if not reddit:
+        if task_id:
+            await command_bus.dispatch(UpdateTaskStatusCommand(task_id=task_id, status="failed", result_data={"error": "Reddit instance not available."}))
+            await websocket_manager.broadcast(json.dumps({"task_id": task_id, "status": "failed", "error": "Reddit instance not available."}))
         return
 
     if not account_service.check_account_health(reddit):
         logging.error("Account health check failed. Aborting comment reply process.")
+        if task_id:
+            await command_bus.dispatch(UpdateTaskStatusCommand(task_id=task_id, status="failed", result_data={"error": "Account health check failed."}))
+            await websocket_manager.broadcast(json.dumps({"task_id": task_id, "status": "failed", "error": "Account health check failed."}))
         return
 
     saas_info_db = await query_bus.dispatch(GetSaaSInfoByIdQuery(saas_info_id=saas_info_id))
     if not saas_info_db:
         logging.error(f"SaaS Info with ID {saas_info_id} not found.")
+        if task_id:
+            await command_bus.dispatch(UpdateTaskStatusCommand(task_id=task_id, status="failed", result_data={"error": f"SaaS Info with ID {saas_info_id} not found."}))
+            await websocket_manager.broadcast(json.dumps({"task_id": task_id, "status": "failed", "error": f"SaaS Info with ID {saas_info_id} not found."}))
         return
 
     # First, try to find if this Reddit post already exists in our DB
@@ -181,6 +289,9 @@ async def _reply_to_reddit_post_comments(
     fetched_comments = await scraping_service.fetch_comments_from_post_url(reddit, reddit_post_url)
     if not fetched_comments:
         logging.warning(f"No comments fetched from {reddit_post_url}. Aborting comment reply process.")
+        if task_id:
+            await command_bus.dispatch(UpdateTaskStatusCommand(task_id=task_id, status="completed", result_data={"message": f"No comments fetched from {reddit_post_url}."}))
+            await websocket_manager.broadcast(json.dumps({"task_id": task_id, "status": "completed", "message": f"No comments fetched from {reddit_post_url}."}))
         return
 
     for comment_data in fetched_comments:
@@ -232,3 +343,6 @@ async def _reply_to_reddit_post_comments(
             logging.error(f"Failed to generate reply for comment DB ID: {comment_db.id}")
     
     logging.info(f"Completed processing replies for Reddit post URL: {reddit_post_url}")
+    if task_id:
+        await command_bus.dispatch(UpdateTaskStatusCommand(task_id=task_id, status="completed", result_data={"message": f"Completed processing replies for Reddit post URL: {reddit_post_url}"}))
+        await websocket_manager.broadcast(json.dumps({"task_id": task_id, "status": "completed", "message": f"Completed processing replies for Reddit post URL: {reddit_post_url}"}))

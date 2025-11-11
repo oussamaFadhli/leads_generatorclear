@@ -1,5 +1,6 @@
-from sqlalchemy import Column, Integer, String, Text, ForeignKey, Boolean, Float
+from sqlalchemy import Column, Integer, String, Text, ForeignKey, Boolean, Float, DateTime
 from sqlalchemy.dialects.postgresql import JSONB # Import JSONB for PostgreSQL
+from sqlalchemy.sql import func
 import json
 from typing import List, Optional
 from sqlalchemy.orm import relationship, backref
@@ -38,6 +39,7 @@ class SaaSInfo(Base):
         cascade="all, delete-orphan",
         lazy="selectin"
     )
+
     pricing = relationship(
         "PricingPlan",
         backref="saas_info",
@@ -50,6 +52,16 @@ class SaaSInfo(Base):
         cascade="all, delete-orphan",
         lazy="selectin"
     )
+
+class Task(Base):
+    __tablename__ = "tasks"
+    id = Column(Integer, primary_key=True, index=True)
+    agent_id = Column(String, index=True, nullable=False)
+    task_name = Column(String, index=True, nullable=False)
+    status = Column(String, index=True, default="pending", nullable=False) # e.g., "pending", "running", "completed", "failed"
+    result_data = Column(JSONB, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
 class Lead(Base):
     __tablename__ = "leads"

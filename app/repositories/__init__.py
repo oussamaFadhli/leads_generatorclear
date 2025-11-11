@@ -5,3 +5,4 @@ from .reddit_post_repository import RedditPostRepository
 from .reddit_comment_repository import RedditCommentRepository
 from .feature_repository import FeatureRepository
 from .pricing_plan_repository import PricingPlanRepository
+from .task_repository import TaskRepository
