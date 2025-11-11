@@ -24,14 +24,6 @@ class PricingPlanBase(BaseModel):
     features: List[str] # Expecting a list of strings from scraper
     link: Optional[str] = None
 
-    @validator('features', pre=True, always=True)
-    def parse_features(cls, v):
-        if isinstance(v, str):
-            try:
-                return json.loads(v)
-            except json.JSONDecodeError:
-                raise ValueError("features must be a valid JSON string or a list of strings")
-        return v
 
 class PricingPlanCreate(PricingPlanBase):
     pass
@@ -49,14 +41,6 @@ class SaaSInfoBase(BaseModel):
     one_liner: str
     target_segments: Optional[List[str]] = None # Made optional for testing simplified scraper
 
-    @validator('target_segments', pre=True, always=True)
-    def parse_target_segments(cls, v):
-        if isinstance(v, str):
-            try:
-                return json.loads(v)
-            except json.JSONDecodeError:
-                raise ValueError("target_segments must be a valid JSON string or a list of strings")
-        return v
 
 class SaaSInfoCreate(SaaSInfoBase):
     features: Optional[List[FeatureCreate]] = None
@@ -81,14 +65,6 @@ class RedditPostBase(BaseModel):
     url: str
     subreddits: Optional[List[str]] = None # Made optional
 
-    @validator('subreddits', pre=True, always=True)
-    def parse_subreddits(cls, v):
-        if isinstance(v, str):
-            try:
-                return json.loads(v)
-            except json.JSONDecodeError:
-                raise ValueError("subreddits must be a valid JSON string or a list of strings")
-        return v
 
 class RedditPostCreate(RedditPostBase):
     pass
@@ -165,14 +141,6 @@ class LeadBase(BaseModel):
     weaknesses: List[str] = Field(default_factory=list)
     related_subreddits: List[str] = Field(default_factory=list)
 
-    @validator('strengths', 'weaknesses', 'related_subreddits', pre=True, always=True)
-    def parse_json_list(cls, v):
-        if isinstance(v, str):
-            try:
-                return json.loads(v)
-            except json.JSONDecodeError:
-                raise ValueError("Field must be a valid JSON string or a list of strings")
-        return v
 
 class LeadCreate(LeadBase):
     pass

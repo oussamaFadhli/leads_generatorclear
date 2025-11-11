@@ -1,11 +1,13 @@
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status
 from typing import List
 
 from app.schemas import schemas
-from app.crud import crud
-from app.core.database import get_db
-from app.services.leads_service import perform_leads_search
+from app.core.dependencies import get_command_bus, get_query_bus
+from app.core.cqrs import CommandBus, QueryBus
+from app.commands.lead_commands import CreateLeadCommand, UpdateLeadCommand, DeleteLeadCommand
+from app.queries.lead_queries import GetLeadByIdQuery, ListLeadsQuery
+from app.queries.saas_info_queries import GetSaaSInfoByIdQuery
+from app.services.leads_service import perform_leads_search # Keep for now, will refactor later
 
 router = APIRouter(
     prefix="/saas-info/{saas_info_id}/leads",
@@ -13,67 +15,86 @@ router = APIRouter(
     responses={404: {"description": "Not found"}},
 )
 
-@router.post("/", response_model=schemas.Lead)
-def create_lead_endpoint(
+@router.post("/", response_model=schemas.Lead, status_code=status.HTTP_201_CREATED)
+async def create_lead_endpoint(
     saas_info_id: int, 
-    lead: schemas.LeadCreate, 
-    db: Session = Depends(get_db)
+    lead_create: schemas.LeadCreate, 
+    command_bus = Depends(get_command_bus),
+    query_bus = Depends(get_query_bus)
 ):
-    db_saas_info = crud.get_saas_info(db, saas_info_id=saas_info_id)
-    if db_saas_info is None:
-        raise HTTPException(status_code=404, detail="SaaS Info not found")
-    return crud.create_lead(db=db, lead=lead, saas_info_id=saas_info_id)
+    saas_info = await query_bus.dispatch(GetSaaSInfoByIdQuery(saas_info_id=saas_info_id))
+    if saas_info is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="SaaS Info not found")
+    
+    command = CreateLeadCommand(
+        competitor_name=lead_create.competitor_name,
+        strengths=lead_create.strengths,
+        weaknesses=lead_create.weaknesses,
+        related_subreddits=lead_create.related_subreddits,
+        saas_info_id=saas_info_id
+    )
+    created_lead = await command_bus.dispatch(command)
+    return schemas.Lead.model_validate(created_lead)
 
 @router.get("/", response_model=List[schemas.Lead])
-def read_leads_for_saas_info_endpoint(
+async def read_leads_for_saas_info_endpoint(
     saas_info_id: int, 
     skip: int = 0, 
     limit: int = 100, 
-    db: Session = Depends(get_db)
+    query_bus = Depends(get_query_bus)
 ):
-    db_saas_info = crud.get_saas_info(db, saas_info_id=saas_info_id)
-    if db_saas_info is None:
-        raise HTTPException(status_code=404, detail="SaaS Info not found")
-    leads = crud.get_leads_for_saas_info(db, saas_info_id=saas_info_id, skip=skip, limit=limit)
+    saas_info = await query_bus.dispatch(GetSaaSInfoByIdQuery(saas_info_id=saas_info_id))
+    if saas_info is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="SaaS Info not found")
+    
+    leads = await query_bus.dispatch(ListLeadsQuery(saas_info_id=saas_info_id, skip=skip, limit=limit))
     return leads
 
 @router.get("/{lead_id}", response_model=schemas.Lead)
-def read_lead_endpoint(
+async def read_lead_endpoint(
     saas_info_id: int, 
     lead_id: int, 
-    db: Session = Depends(get_db)
+    query_bus = Depends(get_query_bus)
 ):
-    db_saas_info = crud.get_saas_info(db, saas_info_id=saas_info_id)
-    if db_saas_info is None:
-        raise HTTPException(status_code=404, detail="SaaS Info not found")
-    db_lead = crud.get_lead(db, lead_id=lead_id)
-    if db_lead is None or db_lead.saas_info_id != saas_info_id:
-        raise HTTPException(status_code=404, detail="Lead not found for this SaaS Info")
-    return db_lead
+    saas_info = await query_bus.dispatch(GetSaaSInfoByIdQuery(saas_info_id=saas_info_id))
+    if saas_info is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="SaaS Info not found")
+    
+    lead = await query_bus.dispatch(GetLeadByIdQuery(lead_id=lead_id))
+    if lead is None or lead.saas_info_id != saas_info_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead not found for this SaaS Info")
+    return lead
 
-@router.delete("/{lead_id}", response_model=schemas.Lead)
-def delete_lead_endpoint(
+@router.delete("/{lead_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_lead_endpoint(
     saas_info_id: int, 
     lead_id: int, 
-    db: Session = Depends(get_db)
+    command_bus = Depends(get_command_bus),
+    query_bus = Depends(get_query_bus)
 ):
-    db_saas_info = crud.get_saas_info(db, saas_info_id=saas_info_id)
-    if db_saas_info is None:
-        raise HTTPException(status_code=404, detail="SaaS Info not found")
-    db_lead = crud.get_lead(db, lead_id=lead_id)
-    if db_lead is None or db_lead.saas_info_id != saas_info_id:
-        raise HTTPException(status_code=404, detail="Lead not found for this SaaS Info")
-    return crud.delete_lead(db=db, lead_id=lead_id)
+    saas_info = await query_bus.dispatch(GetSaaSInfoByIdQuery(saas_info_id=saas_info_id))
+    if saas_info is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="SaaS Info not found")
+    
+    lead = await query_bus.dispatch(GetLeadByIdQuery(lead_id=lead_id))
+    if lead is None or lead.saas_info_id != saas_info_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead not found for this SaaS Info")
+    
+    command = DeleteLeadCommand(lead_id=lead_id)
+    deleted = await command_bus.dispatch(command)
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to delete Lead")
+    return {"message": "Lead deleted successfully"}
 
-@router.post("/search", status_code=202)
+@router.post("/search", status_code=status.HTTP_202_ACCEPTED)
 async def trigger_leads_search_endpoint(
     saas_info_id: int, 
     background_tasks: BackgroundTasks, 
-    db: Session = Depends(get_db)
+    query_bus = Depends(get_query_bus)
 ):
-    db_saas_info = crud.get_saas_info(db, saas_info_id=saas_info_id)
-    if db_saas_info is None:
-        raise HTTPException(status_code=404, detail="SaaS Info not found")
+    saas_info = await query_bus.dispatch(GetSaaSInfoByIdQuery(saas_info_id=saas_info_id))
+    if saas_info is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="SaaS Info not found")
     
-    background_tasks.add_task(perform_leads_search, saas_info_id, db)
+    background_tasks.add_task(perform_leads_search, saas_info_id)
     return {"message": "Lead search initiated in the background."}

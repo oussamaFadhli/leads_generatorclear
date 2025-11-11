@@ -4,7 +4,7 @@ import os
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    DATABASE_URL: str = "sqlite:///./sql_app.db"
+    DATABASE_URL: str = "postgresql+asyncpg://user:password@localhost:5432/dbname"
     NVIDIA_KEY: str
     REDDIT_CLIENT_ID: str
     REDDIT_CLIENT_SECRET: str

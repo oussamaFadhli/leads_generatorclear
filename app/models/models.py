@@ -1,7 +1,8 @@
 from sqlalchemy import Column, Integer, String, Text, ForeignKey, Boolean, Float
+from sqlalchemy.dialects.postgresql import JSONB # Import JSONB for PostgreSQL
 import json
 from typing import List, Optional
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, backref
 from app.core.database import Base
 
 class Feature(Base):
@@ -9,61 +10,73 @@ class Feature(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, index=True)
     description = Column(Text)
-    saas_info_id = Column(Integer, ForeignKey("saas_info.id"))
+    saas_info_id = Column(Integer, ForeignKey("saas_info.id", ondelete="CASCADE"))
 
 class PricingPlan(Base):
     __tablename__ = "pricing_plans"
     id = Column(Integer, primary_key=True, index=True)
     plan_name = Column(String, index=True)
     price = Column(String)
-    features = Column(Text)  # Storing as text, could be JSON or a separate table
+    features = Column(JSONB)  # Storing as JSONB
     link = Column(String, nullable=True)
-    saas_info_id = Column(Integer, ForeignKey("saas_info.id"))
+    saas_info_id = Column(Integer, ForeignKey("saas_info.id", ondelete="CASCADE"))
 
 class SaaSInfo(Base):
     __tablename__ = "saas_info"
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, unique=True, index=True)
     one_liner = Column(Text)
-    target_segments = Column(Text) # Storing as JSON string
+    target_segments = Column(JSONB) # Storing as JSONB
 
     @property
     def target_segments_list(self) -> Optional[List[str]]:
-        if self.target_segments:
-            return json.loads(self.target_segments)
-        return None
+        return self.target_segments
 
-    features = relationship("Feature", backref="saas_info", cascade="all, delete-orphan")
-    pricing = relationship("PricingPlan", backref="saas_info", cascade="all, delete-orphan")
-    leads = relationship("Lead", backref="saas_info", cascade="all, delete-orphan")
+    features = relationship(
+        "Feature",
+        backref="saas_info",
+        cascade="all, delete-orphan",
+        lazy="selectin"
+    )
+    pricing = relationship(
+        "PricingPlan",
+        backref="saas_info",
+        cascade="all, delete-orphan",
+        lazy="selectin"
+    )
+    leads = relationship(
+        "Lead",
+        backref="saas_info",
+        cascade="all, delete-orphan",
+        lazy="selectin"
+    )
 
 class Lead(Base):
     __tablename__ = "leads"
     id = Column(Integer, primary_key=True, index=True)
     competitor_name = Column(String, index=True)
-    strengths = Column(Text) # Storing as JSON string
-    weaknesses = Column(Text) # Storing as JSON string
-    related_subreddits = Column(Text) # Storing as JSON string
-    saas_info_id = Column(Integer, ForeignKey("saas_info.id"))
-    reddit_posts = relationship("RedditPost", backref="lead", cascade="all, delete-orphan")
+    strengths = Column(JSONB) # Storing as JSONB
+    weaknesses = Column(JSONB) # Storing as JSONB
+    related_subreddits = Column(JSONB) # Storing as JSONB
+    saas_info_id = Column(Integer, ForeignKey("saas_info.id", ondelete="CASCADE"))
+    reddit_posts = relationship(
+        "RedditPost",
+        backref="lead",
+        cascade="all, delete-orphan",
+        lazy="selectin"
+    )
 
     @property
     def strengths_list(self) -> Optional[List[str]]:
-        if self.strengths:
-            return json.loads(self.strengths)
-        return None
+        return self.strengths
 
     @property
     def weaknesses_list(self) -> Optional[List[str]]:
-        if self.weaknesses:
-            return json.loads(self.weaknesses)
-        return None
+        return self.weaknesses
 
     @property
     def related_subreddits_list(self) -> Optional[List[str]]:
-        if self.related_subreddits:
-            return json.loads(self.related_subreddits)
-        return None
+        return self.related_subreddits
 
 class RedditPost(Base):
     __tablename__ = "reddit_posts"
@@ -74,7 +87,7 @@ class RedditPost(Base):
     num_comments = Column(Integer)
     author = Column(String)
     url = Column(String)
-    subreddits = Column(Text) # Storing as JSON string
+    subreddits = Column(JSONB) # Storing as JSONB
     lead_score = Column(Float, nullable=True)
     score_justification = Column(Text, nullable=True)
     generated_title = Column(String, nullable=True)
@@ -82,16 +95,11 @@ class RedditPost(Base):
     is_posted = Column(Boolean, default=False)
     ai_generated = Column(Boolean, default=False)
     posted_url = Column(String, nullable=True)
-    lead_id = Column(Integer, ForeignKey("leads.id"))
+    lead_id = Column(Integer, ForeignKey("leads.id", ondelete="CASCADE"))
 
     @property
     def subreddits_list(self) -> List[str]:
-        if self.subreddits:
-            try:
-                return json.loads(self.subreddits)
-            except json.JSONDecodeError:
-                return [] # Return empty list on decode error
-        return [] # Return empty list if subreddits is None or empty
+        return self.subreddits if self.subreddits is not None else []
 
 class RedditComment(Base):
     __tablename__ = "reddit_comments"
@@ -102,9 +110,13 @@ class RedditComment(Base):
     content = Column(Text)
     score = Column(Integer)
     permalink = Column(String)
-    reddit_post_db_id = Column(Integer, ForeignKey("reddit_posts.id")) # Our internal RedditPost ID
+    reddit_post_db_id = Column(Integer, ForeignKey("reddit_posts.id", ondelete="CASCADE")) # Our internal RedditPost ID
     generated_reply_content = Column(Text, nullable=True)
     is_replied = Column(Boolean, default=False)
     ai_generated = Column(Boolean, default=False)
 
-    reddit_post = relationship("RedditPost", backref="comments")
+    reddit_post = relationship(
+        "RedditPost",
+        backref=backref("comments", cascade="all, delete-orphan", lazy="selectin"),
+        lazy="selectin"
+    )

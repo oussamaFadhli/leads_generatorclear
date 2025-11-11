@@ -1,29 +1,43 @@
 import json
-from sqlalchemy.orm import Session
+import logging
+import anyio
 from scrapegraphai.graphs import SearchGraph
 from app.core.config import settings
-from app.models import models
-from app.crud import crud
 from app.schemas import schemas
-import logging
+from app.core.cqrs import CommandBus, QueryBus
+from app.core.dependencies import AsyncSessionLocal, create_command_bus, create_query_bus
+from app.commands.lead_commands import CreateLeadCommand
+from app.queries.saas_info_queries import GetSaaSInfoByIdQuery
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-def perform_leads_search(saas_info_id: int, db: Session):
+async def perform_leads_search(
+    saas_info_id: int,
+    command_bus: CommandBus | None = None,
+    query_bus: QueryBus | None = None,
+):
+    if command_bus is None or query_bus is None:
+        async with AsyncSessionLocal() as session:
+            local_command_bus = create_command_bus(session)
+            local_query_bus = create_query_bus(session)
+            return await _perform_leads_search(saas_info_id, local_command_bus, local_query_bus)
+    return await _perform_leads_search(saas_info_id, command_bus, query_bus)
+
+async def _perform_leads_search(saas_info_id: int, command_bus: CommandBus, query_bus: QueryBus):
     logging.info(f"--- Entering perform_leads_search for SaaS Info ID: {saas_info_id} ---")
     logging.info(f"Starting lead search for SaaS Info ID: {saas_info_id}")
-    saas_info_db = crud.get_saas_info(db, saas_info_id)
+    saas_info_db = await query_bus.dispatch(GetSaaSInfoByIdQuery(saas_info_id=saas_info_id))
     if not saas_info_db:
         logging.error(f"SaaS Info with ID {saas_info_id} not found.")
         return
 
-    # Convert SQLAlchemy model to a dictionary for the prompt
+    # Convert Pydantic model to a dictionary for the prompt
     saas_info_dict = {
         "name": saas_info_db.name,
         "one_liner": saas_info_db.one_liner,
         "features": [{"name": f.name, "desc": f.description} for f in saas_info_db.features],
-        "pricing": [{"plan_name": p.plan_name, "price": p.price, "features": json.loads(p.features) if p.features else [], "link": p.link} for p in saas_info_db.pricing],
-        "target_segments": json.loads(saas_info_db.target_segments) if saas_info_db.target_segments else []
+        "pricing": [{"plan_name": p.plan_name, "price": p.price, "features": p.features, "link": p.link} for p in saas_info_db.pricing],
+        "target_segments": saas_info_db.target_segments
     }
     logging.info(f"SaaS Info Dict for prompt: {json.dumps(saas_info_dict, indent=2)}")
 
@@ -74,7 +88,7 @@ def perform_leads_search(saas_info_id: int, db: Session):
     )
 
     try:
-        raw_output = search_graph.run()
+        raw_output = await anyio.to_thread.run_sync(search_graph.run)
         logging.info(f"Lead search completed for SaaS Info ID: {saas_info_id}")
         logging.info(f"Raw output from search_graph.run(): {raw_output}")
         logging.info(f"Raw output type: {type(raw_output)}")
@@ -159,8 +173,14 @@ def perform_leads_search(saas_info_id: int, db: Session):
                         lead_data[key] = []
 
                 logging.info(f"Creating lead with data: {lead_data}")
-                lead_schema = schemas.LeadCreate(**lead_data)
-                created_lead = crud.create_lead(db, lead_schema, saas_info_id)
+                create_command = CreateLeadCommand(
+                    competitor_name=lead_data["competitor_name"],
+                    strengths=lead_data["strengths"],
+                    weaknesses=lead_data["weaknesses"],
+                    related_subreddits=lead_data["related_subreddits"],
+                    saas_info_id=saas_info_id
+                )
+                created_lead = await command_bus.dispatch(create_command)
                 created_leads.append(created_lead)
                 logging.info(f"Successfully created lead with ID: {created_lead.id if hasattr(created_lead, 'id') else 'unknown'}")
                 
@@ -171,7 +191,7 @@ def perform_leads_search(saas_info_id: int, db: Session):
                 logging.error(f"Traceback: {traceback.format_exc()}")
         
         # Return the list of created leads (or a simplified representation)
-        return {"competitors": [schemas.Lead.from_orm(lead).dict() for lead in created_leads], "related_subreddits": all_related_subreddits}
+        return {"competitors": [schemas.Lead.model_validate(lead).model_dump() for lead in created_leads], "related_subreddits": all_related_subreddits}
 
     except Exception as e:
         logging.error(f"Error during lead search for SaaS Info ID {saas_info_id}: {e}")

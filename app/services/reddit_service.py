@@ -1,23 +1,51 @@
 import logging
+from contextlib import asynccontextmanager
 from typing import List, Optional
-from sqlalchemy.orm import Session
-from app.crud import crud
-from app.models import models
+from app.core.config import settings
 from app.schemas import schemas
-from app.schemas.schemas import LeadCreate # Import LeadCreate schema
-from app.services.reddit import auth_service, account_service, db_operations_service, scraping_service, generation_service, posting_service, preview_service
+from app.core.cqrs import CommandBus, QueryBus
+from app.core.dependencies import AsyncSessionLocal, create_command_bus, create_query_bus
+from app.commands.lead_commands import CreateLeadCommand
+from app.commands.reddit_post_commands import CreateRedditPostCommand
+from app.commands.reddit_comment_commands import CreateRedditCommentCommand, UpdateRedditCommentCommand
+from app.queries.saas_info_queries import GetSaaSInfoByIdQuery
+from app.queries.lead_queries import GetLeadByIdQuery, ListLeadsQuery
+from app.queries.reddit_post_queries import GetRedditPostByIdQuery, GetRedditPostByTitleQuery, ListRedditPostsQuery
+from app.queries.reddit_comment_queries import GetRedditCommentByIdQuery, ListRedditCommentsQuery
+from app.services.reddit import auth_service, account_service, scraping_service, generation_service, posting_service, preview_service
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-def check_posting_rate_limit(db: Session) -> bool:
-    """Check if we're posting too frequently (rate limiting)."""
-    recent_post = db_operations_service.get_most_recent_posted_post(db)
-    
-    if recent_post:
-        pass
-    
-    return True
 
-async def perform_reddit_analysis(saas_info_id: int, lead_id: int, subreddit_name: str, db: Session):
+@asynccontextmanager
+async def _bus_context(
+    command_bus: CommandBus | None,
+    query_bus: QueryBus | None,
+):
+    if command_bus is None or query_bus is None:
+        async with AsyncSessionLocal() as session:
+            local_command_bus = create_command_bus(session)
+            local_query_bus = create_query_bus(session)
+            yield local_command_bus, local_query_bus
+    else:
+        yield command_bus, query_bus
+
+async def perform_reddit_analysis(
+    saas_info_id: int,
+    lead_id: int,
+    subreddit_name: str,
+    command_bus: CommandBus | None = None,
+    query_bus: QueryBus | None = None,
+):
+    async with _bus_context(command_bus, query_bus) as (cmd_bus, qry_bus):
+        await _perform_reddit_analysis(saas_info_id, lead_id, subreddit_name, cmd_bus, qry_bus)
+
+async def _perform_reddit_analysis(
+    saas_info_id: int,
+    lead_id: int,
+    subreddit_name: str,
+    command_bus: CommandBus,
+    query_bus: QueryBus,
+):
     logging.info(f"Starting Reddit analysis for subreddit: {subreddit_name}, Lead ID: {lead_id}")
     reddit = auth_service.get_reddit_instance()
     if not reddit:
@@ -27,7 +55,7 @@ async def perform_reddit_analysis(saas_info_id: int, lead_id: int, subreddit_nam
         logging.error("Account health check failed. Aborting.")
         return
 
-    saas_info_db = crud.get_saas_info(db, saas_info_id)
+    saas_info_db = await query_bus.dispatch(GetSaaSInfoByIdQuery(saas_info_id=saas_info_id))
     if not saas_info_db:
         logging.error(f"SaaS Info with ID {saas_info_id} not found.")
         return
@@ -37,23 +65,60 @@ async def perform_reddit_analysis(saas_info_id: int, lead_id: int, subreddit_nam
         logging.warning(f"No posts fetched from r/{subreddit_name}. Aborting.")
         return
 
-    try:
-        db_operations_service._save_reddit_posts(db, lead_id, fetched_posts)
-    except Exception as e:
-        logging.error(f"Error during saving Reddit posts for Lead ID {lead_id}: {e}")
-    finally:
-        db.close()
+    for post_data in fetched_posts:
+        # Check if post already exists to avoid duplicates
+        existing_post = await query_bus.dispatch(GetRedditPostByTitleQuery(title=post_data.title))
+        if not existing_post:
+            create_post_command = CreateRedditPostCommand(
+                title=post_data.title,
+                content=post_data.content,
+                score=post_data.score,
+                num_comments=post_data.num_comments,
+                author=post_data.author,
+                url=post_data.url,
+                subreddits=post_data.subreddits if post_data.subreddits else [],
+                lead_id=lead_id
+            )
+            await command_bus.dispatch(create_post_command)
+            logging.info(f"Saved new Reddit post: {post_data.title}")
+        else:
+            logging.info(f"Reddit post '{post_data.title}' already exists. Skipping.")
 
-async def generate_reddit_posts(saas_info_id: int, post_id: int, db: Session):
-    await generation_service.generate_reddit_posts(saas_info_id, post_id, db)
+async def generate_reddit_posts(
+    saas_info_id: int,
+    post_id: int,
+    command_bus: CommandBus | None = None,
+    query_bus: QueryBus | None = None,
+) -> None:
+    async with _bus_context(command_bus, query_bus) as (cmd_bus, qry_bus):
+        await generation_service.generate_reddit_posts(saas_info_id, post_id, cmd_bus, qry_bus)
 
-async def post_generated_reddit_post(post_id: int, db: Session):
-    await posting_service.post_generated_reddit_post(post_id, db)
+async def post_generated_reddit_post(
+    post_id: int,
+    command_bus: CommandBus | None = None,
+    query_bus: QueryBus | None = None,
+) -> None:
+    async with _bus_context(command_bus, query_bus) as (cmd_bus, qry_bus):
+        await posting_service.post_generated_reddit_post(post_id, cmd_bus, qry_bus)
 
-def preview_generated_post(post_id: int, db: Session) -> Optional[dict]:
-    return preview_service.preview_generated_post(post_id, db)
+async def preview_generated_post(post_id: int, query_bus: QueryBus) -> Optional[dict]:
+    return await preview_service.preview_generated_post(post_id, query_bus)
 
-async def reply_to_reddit_post_comments(saas_info_id: int, reddit_post_url: str, db: Session):
+async def reply_to_reddit_post_comments(
+    saas_info_id: int,
+    reddit_post_url: str,
+    command_bus: CommandBus | None = None,
+    query_bus: QueryBus | None = None,
+):
+    async with _bus_context(command_bus, query_bus) as (cmd_bus, qry_bus):
+        await _reply_to_reddit_post_comments(saas_info_id, reddit_post_url, cmd_bus, qry_bus)
+
+async def _reply_to_reddit_post_comments(
+    saas_info_id: int,
+    reddit_post_url: str,
+    command_bus: CommandBus,
+    query_bus: QueryBus,
+):
     logging.info(f"Starting process to reply to comments for Reddit post URL: {reddit_post_url}")
     reddit = auth_service.get_reddit_instance()
     if not reddit:
@@ -63,57 +128,50 @@ async def reply_to_reddit_post_comments(saas_info_id: int, reddit_post_url: str,
         logging.error("Account health check failed. Aborting comment reply process.")
         return
 
-    saas_info_db = crud.get_saas_info(db, saas_info_id)
+    saas_info_db = await query_bus.dispatch(GetSaaSInfoByIdQuery(saas_info_id=saas_info_id))
     if not saas_info_db:
         logging.error(f"SaaS Info with ID {saas_info_id} not found.")
         return
 
     # First, try to find if this Reddit post already exists in our DB
-    db_reddit_post = db.query(models.RedditPost).filter(models.RedditPost.url == reddit_post_url).first()
+    db_reddit_post = await query_bus.dispatch(ListRedditPostsQuery(url=reddit_post_url, limit=1))
+    db_reddit_post = db_reddit_post[0] if db_reddit_post else None
+
     if not db_reddit_post:
         # If not, we need to create a placeholder RedditPost entry to link comments to
-        # For simplicity, we'll create a minimal entry. In a real scenario, you might scrape the post details.
         logging.info(f"Reddit post {reddit_post_url} not found in DB. Creating a placeholder entry.")
-        # Extract title and author from URL if possible, or use placeholders
         post_title = f"Reddit Post: {reddit_post_url}"
         post_author = "unknown"
-        try:
-            submission = reddit.submission(url=reddit_post_url)
-            post_title = submission.title
-            post_author = str(submission.author)
-        except Exception as e:
-            logging.warning(f"Could not fetch submission details for {reddit_post_url}: {e}. Using placeholders.")
+        submission = reddit.submission(url=reddit_post_url)
+        post_title = submission.title
+        post_author = str(submission.author)
 
-        # Assuming a lead_id is required, but we don't have one directly from the URL.
-        # For now, we'll use a dummy lead_id or require it in the endpoint.
-        # For this implementation, let's assume we need to associate it with an existing lead.
-        # This part needs clarification from the user or a design decision.
-        # For now, let's fetch the first lead associated with the saas_info_id.
-        db_lead = db.query(models.Lead).filter(models.Lead.saas_info_id == saas_info_id).first()
+        db_lead = await query_bus.dispatch(ListLeadsQuery(saas_info_id=saas_info_id, limit=1))
+        db_lead = db_lead[0] if db_lead else None
+
         if not db_lead:
             logging.warning(f"No lead found for SaaS Info ID {saas_info_id}. Creating a default lead.")
-            # Create a default lead if none exists for the saas_info_id
-            default_lead_create = schemas.LeadCreate(
+            create_lead_command = CreateLeadCommand(
                 competitor_name=f"Default Lead for SaaS {saas_info_id}",
                 strengths=["general problem solving"],
                 weaknesses=["lack of specific focus"],
-                related_subreddits=["general_discussion"]
+                related_subreddits=["general_discussion"],
+                saas_info_id=saas_info_id
             )
-            db_lead = crud.create_lead(db, default_lead_create, saas_info_id)
-            db.refresh(db_lead)
+            db_lead = await command_bus.dispatch(create_lead_command)
             logging.info(f"Created default Lead with ID: {db_lead.id} for SaaS Info ID: {saas_info_id}")
 
-        reddit_post_create = schemas.RedditPostCreate(
+        create_reddit_post_command = CreateRedditPostCommand(
             title=post_title,
             content="Scraped post content placeholder.",
             score=0,
             num_comments=0,
             author=post_author,
             url=reddit_post_url,
-            subreddits=[]
+            subreddits=[],
+            lead_id=db_lead.id
         )
-        db_reddit_post = crud.create_reddit_post(db, reddit_post_create, db_lead.id)
-        db.refresh(db_reddit_post)
+        db_reddit_post = await command_bus.dispatch(create_reddit_post_command)
         logging.info(f"Created placeholder RedditPost with ID: {db_reddit_post.id}")
 
     fetched_comments = await scraping_service.fetch_comments_from_post_url(reddit, reddit_post_url)
@@ -121,10 +179,25 @@ async def reply_to_reddit_post_comments(saas_info_id: int, reddit_post_url: str,
         logging.warning(f"No comments fetched from {reddit_post_url}. Aborting comment reply process.")
         return
 
-    db_operations_service.save_reddit_comments(db, db_reddit_post.id, fetched_comments)
-    
+        for comment_data in fetched_comments:
+            existing_comment = await query_bus.dispatch(GetRedditCommentByIdQuery(comment_id=comment_data.comment_id))
+            if not existing_comment:
+                create_comment_command = CreateRedditCommentCommand(
+                    comment_id=comment_data.comment_id,
+                post_id=comment_data.post_id,
+                author=comment_data.author,
+                content=comment_data.content,
+                score=comment_data.score,
+                permalink=comment_data.permalink,
+                reddit_post_db_id=db_reddit_post.id
+            )
+            await command_bus.dispatch(create_comment_command)
+            logging.info(f"Saved new Reddit comment: {comment_data.comment_id}")
+        else:
+            logging.info(f"Reddit comment '{comment_data.comment_id}' already exists. Skipping.")
+
     # Retrieve comments from DB to ensure we have their internal IDs
-    comments_from_db = db_operations_service.get_reddit_comments_for_post(db, db_reddit_post.id)
+    comments_from_db = await query_bus.dispatch(ListRedditCommentsQuery(reddit_post_db_id=db_reddit_post.id))
 
     for comment_db in comments_from_db:
         if comment_db.is_replied:
@@ -134,7 +207,8 @@ async def reply_to_reddit_post_comments(saas_info_id: int, reddit_post_url: str,
         generated_reply_content = await generation_service.generate_reddit_comment_reply(
             saas_info_id, 
             comment_db.content, 
-            db
+            command_bus,
+            query_bus
         )
 
         if generated_reply_content:
@@ -142,7 +216,8 @@ async def reply_to_reddit_post_comments(saas_info_id: int, reddit_post_url: str,
                 reddit, 
                 comment_db.comment_id, 
                 generated_reply_content, 
-                db, 
+                command_bus, 
+                query_bus,
                 comment_db.id
             )
             if success:
@@ -152,5 +227,4 @@ async def reply_to_reddit_post_comments(saas_info_id: int, reddit_post_url: str,
         else:
             logging.error(f"Failed to generate reply for comment DB ID: {comment_db.id}")
     
-    db.close()
     logging.info(f"Completed processing replies for Reddit post URL: {reddit_post_url}")

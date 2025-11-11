@@ -1,22 +1,24 @@
 import json
 import logging
-from sqlalchemy.orm import Session
 from scrapegraphai.graphs import DocumentScraperGraph
 from app.core.config import settings
-from app.crud import crud
 from app.schemas import schemas
-from app.services.reddit import db_operations_service
+from app.core.cqrs import CommandBus, QueryBus
+from app.queries.saas_info_queries import GetSaaSInfoByIdQuery
+from app.queries.reddit_post_queries import GetRedditPostByIdQuery
+from app.commands.reddit_post_commands import UpdateRedditPostCommand
+from app.commands.reddit_comment_commands import UpdateRedditCommentCommand
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-async def generate_reddit_posts(saas_info_id: int, post_id: int, db: Session):
+async def generate_reddit_posts(saas_info_id: int, post_id: int, command_bus: CommandBus, query_bus: QueryBus):
     logging.info(f"Starting Reddit post generation for Post ID: {post_id}")
-    saas_info_db = crud.get_saas_info(db, saas_info_id)
+    saas_info_db = await query_bus.dispatch(GetSaaSInfoByIdQuery(saas_info_id=saas_info_id))
     if not saas_info_db:
         logging.error(f"SaaS Info with ID {saas_info_id} not found.")
         return
 
-    db_post = db_operations_service.get_reddit_post_by_id(db, post_id)
+    db_post = await query_bus.dispatch(GetRedditPostByIdQuery(reddit_post_id=post_id))
     if not db_post:
         logging.error(f"Reddit Post with ID {post_id} not found.")
         return
@@ -90,19 +92,13 @@ async def generate_reddit_posts(saas_info_id: int, post_id: int, db: Session):
             try:
                 generated_post_content_obj = schemas.GeneratedPostContent(**raw_generated_data)
                 
-                post_update_schema = schemas.RedditPostUpdate(
-                    title=db_post.title,
-                    content=db_post.content,
-                    score=db_post.score,
-                    num_comments=db_post.num_comments,
-                    author=db_post.author,
-                    url=db_post.url,
-                    subreddits=db_post.subreddits_list if db_post.subreddits_list is not None else [], # Ensure subreddits is always a list
+                update_command = UpdateRedditPostCommand(
+                    reddit_post_id=db_post.id,
                     generated_title=generated_post_content_obj.title,
                     generated_content=generated_post_content_obj.content,
                     ai_generated=True
                 )
-                db_operations_service.update_reddit_post_in_db(db, post_id, post_update_schema)
+                await command_bus.dispatch(update_command)
             except Exception as e:
                 logging.error(f"Error validating or updating generated post: {e} - Raw Data: {raw_generated_data}")
         else:
@@ -110,12 +106,10 @@ async def generate_reddit_posts(saas_info_id: int, post_id: int, db: Session):
 
     except Exception as e:
         logging.error(f"Error during Reddit post generation for Post ID {post_id}: {e}")
-    finally:
-        db.close()
 
-async def generate_reddit_comment_reply(saas_info_id: int, original_comment_content: str, db: Session):
+async def generate_reddit_comment_reply(saas_info_id: int, original_comment_content: str, command_bus: CommandBus, query_bus: QueryBus):
     logging.info(f"Starting Reddit comment reply generation for SaaS Info ID: {saas_info_id}")
-    saas_info_db = crud.get_saas_info(db, saas_info_id)
+    saas_info_db = await query_bus.dispatch(GetSaaSInfoByIdQuery(saas_info_id=saas_info_id))
     if not saas_info_db:
         logging.error(f"SaaS Info with ID {saas_info_id} not found.")
         return
@@ -194,6 +188,4 @@ async def generate_reddit_comment_reply(saas_info_id: int, original_comment_cont
 
     except Exception as e:
         logging.error(f"Error during Reddit comment reply generation for SaaS Info ID {saas_info_id}: {e}")
-    finally:
-        db.close()
     return None
