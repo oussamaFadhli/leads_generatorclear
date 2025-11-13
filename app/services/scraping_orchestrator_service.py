@@ -1,7 +1,9 @@
 import logging
 from typing import List, Dict, Any
 import praw
+from sqlalchemy.ext.asyncio import AsyncSession # Import AsyncSession
 from app.core.cqrs import CommandBus
+from app.core.dependencies import create_command_bus # Import create_command_bus
 from app.commands.task_commands import CreateTaskCommand, UpdateTaskStatusCommand
 from app.services.reddit.scraping_service import fetch_reddit_posts, fetch_comments_from_post_url
 from app.schemas.schemas import RedditPostCreate, RedditCommentCreate
@@ -9,8 +11,8 @@ from app.schemas.schemas import RedditPostCreate, RedditCommentCreate
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class ScrapingOrchestratorService:
-    def __init__(self, command_bus: CommandBus):
-        self.command_bus = command_bus
+    def __init__(self, db: AsyncSession): # Accept AsyncSession
+        self.command_bus = create_command_bus(db) # Create CommandBus internally
 
     async def orchestrate_reddit_scraping(
         self,

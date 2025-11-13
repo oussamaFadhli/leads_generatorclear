@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field, validator
 from typing import List, Optional
 import json
+from datetime import datetime # Import datetime
 
 # Feature Schemas
 class FeatureBase(BaseModel):
@@ -152,30 +153,6 @@ class Lead(LeadBase):
     id: int
     saas_info_id: int
     reddit_posts: List[RedditPost] = []
-
-    class Config:
-        from_attributes = True
-
-# Task Schemas
-class TaskBase(BaseModel):
-    agent_id: str
-    task_name: str
-    status: str = Field(default="pending")
-    result_data: Optional[dict] = None
-
-class TaskCreate(TaskBase):
-    pass
-
-class TaskUpdate(BaseModel):
-    agent_id: Optional[str] = None
-    task_name: Optional[str] = None
-    status: Optional[str] = None
-    result_data: Optional[dict] = None
-
-class Task(TaskBase):
-    id: int
-    created_at: Optional[str] = None # Using str for simplicity, can be datetime
-    updated_at: Optional[str] = None # Using str for simplicity, can be datetime
 
     class Config:
         from_attributes = True

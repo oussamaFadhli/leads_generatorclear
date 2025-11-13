@@ -1,10 +1,8 @@
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import HTTPException
-from app.api.routers import saas_info, leads, reddit_posts, tasks
-from app.core.database import engine
-from app.core.dependencies import get_command_bus, get_query_bus
-from app.models import models # Keep for target_metadata in Alembic env.py, but not for create_all
+from app.api.routers import saas_info, leads, reddit_posts
+from fastapi.middleware.cors import CORSMiddleware
 import logging
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -13,6 +11,15 @@ app = FastAPI(
     title="Reddit Engagement API",
     description="API for managing SaaS information, Reddit leads, and post generation/posting.",
     version="1.0.0",
+)
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 @app.exception_handler(HTTPException)
@@ -34,8 +41,7 @@ async def general_exception_handler(request: Request, exc: Exception):
 app.include_router(saas_info.router)
 app.include_router(leads.router)
 app.include_router(reddit_posts.router)
-app.include_router(reddit_posts.comments_router) # Include the new comments router
-app.include_router(tasks.router) # Include the new tasks router
+app.include_router(reddit_posts.comments_router)
 
 @app.get("/")
 async def root():

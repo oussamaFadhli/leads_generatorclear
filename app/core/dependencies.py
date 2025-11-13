@@ -3,13 +3,12 @@ from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 import praw # Import praw
 from app.core.config import settings # Import settings
-from app.core.database import AsyncSessionLocal
+from app.core.database import AsyncSessionLocal, get_db as get_session_for_request # Import get_db from database.py and alias it
 from app.core.cqrs import CommandBus, QueryBus
 from app.repositories import (
     SaaSInfoRepository, LeadRepository, RedditPostRepository,
-    RedditCommentRepository, FeatureRepository, PricingPlanRepository, TaskRepository
+    RedditCommentRepository, FeatureRepository, PricingPlanRepository
 )
-from app.services.task_service import TaskService
 from app.core.websocket_manager import websocket_manager # Import websocket_manager
 from app.command_handlers import (
     CreateSaaSInfoCommandHandler, UpdateSaaSInfoCommandHandler, DeleteSaaSInfoCommandHandler,
@@ -18,7 +17,7 @@ from app.command_handlers import (
     CreateRedditCommentCommandHandler, UpdateRedditCommentCommandHandler, DeleteRedditCommentCommandHandler,
     CreateFeatureCommandHandler, UpdateFeatureCommandHandler, DeleteFeatureCommandHandler,
     CreatePricingPlanCommandHandler, UpdatePricingPlanCommandHandler, DeletePricingPlanCommandHandler,
-    CreateTaskCommandHandler, UpdateTaskStatusCommandHandler
+
 )
 from app.query_handlers import (
     GetSaaSInfoByIdQueryHandler, GetSaaSInfoByNameQueryHandler, ListSaaSInfoQueryHandler,
@@ -28,7 +27,6 @@ from app.query_handlers import (
     GetRedditCommentByIdQueryHandler, GetRedditCommentByCommentIdQueryHandler, ListRedditCommentsQueryHandler,
     GetFeatureByIdQueryHandler, GetFeatureByNameQueryHandler, ListFeaturesQueryHandler,
     GetPricingPlanByIdQueryHandler, GetPricingPlanByPlanNameQueryHandler, ListPricingPlansQueryHandler,
-    GetTaskQueryHandler, GetAllTasksQueryHandler, GetTasksByAgentIdQueryHandler
 )
 from app.commands import (
     CreateSaaSInfoCommand, UpdateSaaSInfoCommand, DeleteSaaSInfoCommand,
@@ -36,8 +34,7 @@ from app.commands import (
     CreateRedditPostCommand, UpdateRedditPostCommand, DeleteRedditPostCommand,
     CreateRedditCommentCommand, UpdateRedditCommentCommand, DeleteRedditCommentCommand,
     CreateFeatureCommand, UpdateFeatureCommand, DeleteFeatureCommand,
-    CreatePricingPlanCommand, UpdatePricingPlanCommand, DeletePricingPlanCommand,
-    CreateTaskCommand, UpdateTaskStatusCommand
+    CreatePricingPlanCommand, UpdatePricingPlanCommand, DeletePricingPlanCommand
 )
 from app.queries import (
     GetSaaSInfoByIdQuery, GetSaaSInfoByNameQuery, ListSaaSInfoQuery,
@@ -46,11 +43,14 @@ from app.queries import (
     GetRedditCommentByIdQuery, GetRedditCommentByCommentIdQuery, ListRedditCommentsQuery,
     GetFeatureByIdQuery, GetFeatureByNameQuery, ListFeaturesQuery,
     GetPricingPlanByIdQuery, GetPricingPlanByPlanNameQuery, ListPricingPlansQuery,
-    GetTaskQuery, GetAllTasksQuery, GetTasksByAgentIdQuery
 )
 
 
-async def get_db() -> AsyncGenerator[AsyncSession, None]:
+async def get_session_for_background_tasks() -> AsyncGenerator[AsyncSession, None]:
+    """
+    Provides a database session for background tasks.
+    This session is independent of the request lifecycle.
+    """
     async with AsyncSessionLocal() as session:
         yield session
 
@@ -87,14 +87,11 @@ def create_command_bus(db: AsyncSession) -> CommandBus:
     command_bus.register_handler(UpdatePricingPlanCommand, UpdatePricingPlanCommandHandler(PricingPlanRepository(db)))
     command_bus.register_handler(DeletePricingPlanCommand, DeletePricingPlanCommandHandler(PricingPlanRepository(db)))
 
-    # Register Task Command Handlers
-    task_service = TaskService(TaskRepository(db), websocket_manager)
-    command_bus.register_handler(CreateTaskCommand, CreateTaskCommandHandler(task_service))
-    command_bus.register_handler(UpdateTaskStatusCommand, UpdateTaskStatusCommandHandler(task_service))
+
 
     return command_bus
 
-async def get_command_bus(db: AsyncSession = Depends(get_db)) -> CommandBus:
+async def get_command_bus(db: AsyncSession = Depends(get_session_for_request)) -> CommandBus:
     return create_command_bus(db)
 
 def create_query_bus(db: AsyncSession) -> QueryBus:
@@ -134,15 +131,10 @@ def create_query_bus(db: AsyncSession) -> QueryBus:
     query_bus.register_handler(GetPricingPlanByPlanNameQuery, GetPricingPlanByPlanNameQueryHandler(PricingPlanRepository(db)))
     query_bus.register_handler(ListPricingPlansQuery, ListPricingPlansQueryHandler(PricingPlanRepository(db)))
 
-    # Register Task Query Handlers
-    task_service = TaskService(TaskRepository(db), websocket_manager)
-    query_bus.register_handler(GetTaskQuery, GetTaskQueryHandler(task_service))
-    query_bus.register_handler(GetAllTasksQuery, GetAllTasksQueryHandler(task_service))
-    query_bus.register_handler(GetTasksByAgentIdQuery, GetTasksByAgentIdQueryHandler(task_service))
 
     return query_bus
 
-async def get_query_bus(db: AsyncSession = Depends(get_db)) -> QueryBus:
+async def get_query_bus(db: AsyncSession = Depends(get_session_for_request)) -> QueryBus:
     return create_query_bus(db)
 
 def get_reddit_instance() -> praw.Reddit:
