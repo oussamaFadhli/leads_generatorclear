@@ -1,6 +1,21 @@
 from logging.config import fileConfig
 import os
+import sys
+from pathlib import Path
 from dotenv import load_dotenv
+
+# Add project root to sys.path so app can be imported
+project_root = str(Path(__file__).parent.parent)
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+# Load environment variables FIRST - use absolute path
+env_local_path = Path(project_root) / '.env.local'
+env_path = Path(project_root) / '.env'
+if env_local_path.exists():
+    load_dotenv(str(env_local_path))
+elif env_path.exists():
+    load_dotenv(str(env_path))
 
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
@@ -25,9 +40,6 @@ target_metadata = Base.metadata
 # can be acquired:
 # my_important_option = config.get_main_option("my_important_option")
 # ... etc.
-
-# Load environment variables
-load_dotenv()
 
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode.
