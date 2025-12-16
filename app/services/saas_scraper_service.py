@@ -39,8 +39,8 @@ async def _perform_saas_scrape(url: str, command_bus: CommandBus, query_bus: Que
         },
         "verbose": True,
         "headless": True,
-        "depth": 1,
-        "only_inside_links": False,
+        "depth": 2,
+        "only_inside_links": True,
     }
 
     enhanced_prompt = """
@@ -82,9 +82,7 @@ async def _perform_saas_scrape(url: str, command_bus: CommandBus, query_bus: Que
                     saas_info_id = existing_saas_info.id
                     update_command = UpdateSaaSInfoCommand(
                         saas_info_id=existing_saas_info.id,
-                        name=saas_info_create_schema.name,
-                        one_liner=saas_info_create_schema.one_liner,
-                        target_segments=saas_info_create_schema.target_segments
+                        payload=saas_info_create_schema.model_dump()
                     )
                     db_saas_info = await command_bus.dispatch(update_command)
                     if db_saas_info:
@@ -97,9 +95,7 @@ async def _perform_saas_scrape(url: str, command_bus: CommandBus, query_bus: Que
                         )
                 else:
                     create_command = CreateSaaSInfoCommand(
-                        name=saas_info_create_schema.name,
-                        one_liner=saas_info_create_schema.one_liner,
-                        target_segments=saas_info_create_schema.target_segments if saas_info_create_schema.target_segments else []
+                        payload=saas_info_create_schema.model_dump()
                     )
                     db_saas_info = await command_bus.dispatch(create_command)
                     saas_info_id = db_saas_info.id

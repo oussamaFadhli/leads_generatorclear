@@ -1,17 +1,16 @@
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import Optional, Dict, Any
 from app.core.cqrs import Command
 
+
 class CreateSaaSInfoCommand(Command, BaseModel):
-    name: str
-    one_liner: str
-    target_segments: List[str]
+    payload: Dict[str, Any]
+
 
 class UpdateSaaSInfoCommand(Command, BaseModel):
     saas_info_id: int
-    name: Optional[str] = None
-    one_liner: Optional[str] = None
-    target_segments: Optional[List[str]] = None
+    payload: Optional[Dict[str, Any]] = None
+
 
 class DeleteSaaSInfoCommand(Command, BaseModel):
     saas_info_id: int

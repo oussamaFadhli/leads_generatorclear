@@ -15,31 +15,27 @@ def get_all_saas_info(db: Session, skip: int = 0, limit: int = 100):
     return db.query(models.SaaSInfo).offset(skip).limit(limit).all()
 
 def create_saas_info(db: Session, saas_info: schemas.SaaSInfoCreate):
-    target_segments_json = json.dumps(saas_info.target_segments) if saas_info.target_segments is not None else None
     db_saas_info = models.SaaSInfo(
         name=saas_info.name,
         one_liner=saas_info.one_liner,
-        target_segments=target_segments_json
+        target_segments=saas_info.target_segments
     )
     db.add(db_saas_info)
     db.commit()
     db.refresh(db_saas_info)
-
-    for feature_data in saas_info.features:
+    for feature_data in saas_info.features or []:
         db_feature = models.Feature(**feature_data.model_dump(), saas_info_id=db_saas_info.id)
         db.add(db_feature)
     
-    for pricing_data in saas_info.pricing:
-        pricing_features_json = json.dumps(pricing_data.features) if pricing_data.features is not None else None
+    for pricing_data in saas_info.pricing or []:
         db_pricing = models.PricingPlan(
             plan_name=pricing_data.plan_name,
             price=pricing_data.price,
-            features=pricing_features_json,
+            features=pricing_data.features if pricing_data.features is not None else [],
             link=pricing_data.link,
             saas_info_id=db_saas_info.id
         )
         db.add(db_pricing)
-
     db.commit()
     db.refresh(db_saas_info)
     return db_saas_info
@@ -49,22 +45,21 @@ def update_saas_info(db: Session, saas_info_id: int, saas_info: schemas.SaaSInfo
     if db_saas_info:
         db_saas_info.name = saas_info.name
         db_saas_info.one_liner = saas_info.one_liner
-        db_saas_info.target_segments = json.dumps(saas_info.target_segments) if saas_info.target_segments is not None else None
+        db_saas_info.target_segments = saas_info.target_segments
 
         # Update features
         db.query(models.Feature).filter(models.Feature.saas_info_id == saas_info_id).delete()
-        for feature_data in saas_info.features:
+        for feature_data in saas_info.features or []:
             db_feature = models.Feature(**feature_data.model_dump(), saas_info_id=saas_info_id)
             db.add(db_feature)
         
         # Update pricing plans
         db.query(models.PricingPlan).filter(models.PricingPlan.saas_info_id == saas_info_id).delete()
-        for pricing_data in saas_info.pricing:
-            pricing_features_json = json.dumps(pricing_data.features) if pricing_data.features is not None else None
+        for pricing_data in saas_info.pricing or []:
             db_pricing = models.PricingPlan(
                 plan_name=pricing_data.plan_name,
                 price=pricing_data.price,
-                features=pricing_features_json,
+                features=pricing_data.features if pricing_data.features is not None else [],
                 link=pricing_data.link,
                 saas_info_id=saas_info_id
             )

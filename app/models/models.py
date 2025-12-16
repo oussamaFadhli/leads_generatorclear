@@ -28,6 +28,19 @@ class SaaSInfo(Base):
     name = Column(String, unique=True, index=True)
     one_liner = Column(Text)
     target_segments = Column(JSONB) # Storing as JSONB
+    detected_technologies = Column(JSONB) 
+    contact_info = Column(JSONB, nullable=True)
+    social_links = Column(JSONB, nullable=True)
+    business_profile = Column(JSONB, nullable=True)
+    icp_profiles = Column(JSONB, nullable=True)
+    offer_breakdowns = Column(JSONB, nullable=True)
+    channel_mapping = Column(JSONB, nullable=True)
+    psychology_language = Column(JSONB, nullable=True)
+    market_intelligence = Column(JSONB, nullable=True)
+    customer_voice = Column(JSONB, nullable=True)
+    buyer_journey = Column(JSONB, nullable=True)
+    decision_makers = Column(JSONB, nullable=True)
+    account_scoring = Column(JSONB, nullable=True)
 
     @property
     def target_segments_list(self) -> Optional[List[str]]:
